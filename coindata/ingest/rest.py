@@ -104,7 +104,7 @@ class BinanceRestClient:
         return value
 
     def fetch_funding(self, symbol: str) -> FundingInfo:
-        """현재 펀딩 정보(A.5.3). 필드명(`lastFundingRate`, `nextFundingTime`)은 공식 확인 전이다(PRD 15.6)."""
+        """현재 펀딩 정보(A.5.3). 필드명은 실응답으로 확인했고, 가중치는 공식 확인 전이다(PRD 15.6)."""
         path = "/fapi/v1/premiumIndex"
         payload = self._get_json(path, {"symbol": symbol}, API_LIMITS.premium_index_weight, futures_data=False)
         if not isinstance(payload, dict):

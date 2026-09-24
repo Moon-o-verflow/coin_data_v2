@@ -290,7 +290,7 @@ RSI·MACD·볼린저밴드·이동평균은 모두 종가에서 파생되어 상
 | `/futures/data/topLongShortAccountRatio` | 0 | 동일 |
 | `/futures/data/globalLongShortAccountRatio` | 0 | 동일 |
 | `/futures/data/takerlongshortRatio` | 0 | 동일 |
-| `/fapi/v1/premiumIndex` | 공식 문서 확인 필요 | 인증 불필요, 조회 시점 스냅샷 |
+| `/fapi/v1/premiumIndex` | 가중치 공식 문서 확인 필요(필드명은 실응답으로 확인) | 인증 불필요, 조회 시점 스냅샷 |
 | `/fapi/v1/aggTrades` | 20 | **24시간 이내만 조회 가능**, startTime/endTime 동시 지정 시 간격 1시간 미만, limit 최대 1000 |
 
 **전역 제약**: USD-M 선물 REST는 IP당 분당 요청 가중치 2400. `/futures/data/*`의 "IP당 5분간 1000회"는 가중치와 별개의 요청 횟수 한도다.
@@ -867,7 +867,7 @@ metrics 아카이브의 행 결측은 드물지만(8.4), 2025-07 이전에는 to
 
 아래 항목은 작성 환경에서 공식 문서에 접근하지 못해 2차 자료로만 확인했다. 구현 전에 공식 문서로 확인한다.
 - `/fapi/v1/klines`, `/fapi/v1/premiumIndexKlines`의 limit 최대값(1000 또는 1500)과 구간별 가중치
-- `/fapi/v1/premiumIndex`의 가중치와 응답 필드명(`lastFundingRate`, `nextFundingTime`)
+- `/fapi/v1/premiumIndex`의 가중치. 응답 필드명(`lastFundingRate`, `nextFundingTime`)은 2026-09-24 실응답으로 확인했다
 - REST 파생 지표 엔드포인트의 응답 필드명(8.4 매핑표)
 
 ### 15.7 metrics 컬럼 매핑과 시각 의미
@@ -1216,7 +1216,7 @@ A.2.2의 Parkinson 백분위를 사용한다.
 
 평활을 택한 이유: 흔들림의 원인은 샘플 12개짜리 1분 값의 측정 노이즈다. 유지 조건은 원인을 그대로 둔 채 판정만 늦추고 상태와 파라미터를 늘린다. 평활은 원인을 직접 줄인다. 평활 TF를 15분으로 맞추면 판정 주기가 결정 타임프레임과 일치하고, 이벤트 보고 기간(15m)을 그대로 쓸 수 있다.
 
-**A.5.3 펀딩 (비용 정보)** — 검증 상태: `확인 필요`(필드명)
+**A.5.3 펀딩 (비용 정보)** — 필드명은 2026-09-24 실응답으로 확인. 가중치는 `확인 필요`(15.6)
 
 - 출처: `/fapi/v1/premiumIndex`, 필드 `lastFundingRate`, `nextFundingTime`.
 - 출력: `funding_rate_bp = lastFundingRate × 10000`, `minutes_to_next_funding = (nextFundingTime − ref_time) / 60000` (정수 내림).
