@@ -36,6 +36,8 @@ class ApiLimits:
     # 실제 사용량은 응답 헤더로 추적한다.
     kline_weight_by_limit: tuple[tuple[int, int], ...] = ((99, 1), (499, 2), (1000, 5), (1500, 10))
     server_time_weight: int = 1
+    # /fapi/v1/premiumIndex(심볼 지정) 가중치. 공식 확인 전이다(PRD 8.2, 15.6). 사전 추정에만 쓴다.
+    premium_index_weight: int = 1
     futures_data_page_limit: int = 500
     futures_data_weight: int = 0
     futures_data_requests_per_window: int = 1000

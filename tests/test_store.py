@@ -15,6 +15,8 @@ from coindata.models import (
     GapReason,
     Kline,
     MetricsRow,
+    SummaryRecord,
+    SummaryTrigger,
     TimeRange,
 )
 from coindata.store import gaps, query, writer
@@ -46,6 +48,24 @@ class StoreTestCase(unittest.TestCase):
 
 
 class SchemaTest(StoreTestCase):
+    def test_migrates_v1_summary_log(self) -> None:
+        self.conn.execute("DROP TABLE summary_log")
+        self.conn.execute(
+            'CREATE TABLE summary_log (summary_id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, '
+            '"trigger" TEXT NOT NULL CHECK ("trigger" IN (\'manual\')), ref_time INTEGER NOT NULL, '
+            "ref_price REAL NOT NULL, params_hash TEXT NOT NULL, state TEXT NOT NULL, file_path TEXT NOT NULL)"
+        )
+        self.conn.execute("INSERT INTO summary_log VALUES ('A', 1, 'manual', 2, 3.0, 'h', '{}', 'a.json')")
+        self.conn.execute("PRAGMA user_version = 1")
+        self.conn.commit()
+        ensure_schema(self.conn)
+        self.assertEqual(self.conn.execute("PRAGMA user_version").fetchone()[0], 2)
+        writer.insert_summary(
+            self.conn, SummaryRecord("B", 5, SummaryTrigger.HISTORICAL, 4, 3.0, "h", "{}", "b.json")
+        )
+        self.assertEqual(self.conn.execute('SELECT summary_id, "trigger" FROM summary_log ORDER BY summary_id').fetchall(),
+                         [("A", "manual"), ("B", "historical")])
+
     def test_schema_is_idempotent(self) -> None:
         ensure_schema(self.conn)
         tables = {row[0] for row in self.conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}

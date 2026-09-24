@@ -25,6 +25,7 @@ from coindata.models import (
     BarFetch,
     Dataset,
     FetchFailure,
+    FundingInfo,
     Kline,
     MetricsFetch,
     MetricsRow,
@@ -101,6 +102,17 @@ class BinanceRestClient:
         if not isinstance(value, int) or isinstance(value, bool):
             raise RestSchemaError(f"/fapi/v1/time: serverTime이 정수가 아니다: {payload!r}")
         return value
+
+    def fetch_funding(self, symbol: str) -> FundingInfo:
+        """현재 펀딩 정보(A.5.3). 필드명(`lastFundingRate`, `nextFundingTime`)은 공식 확인 전이다(PRD 15.6)."""
+        path = "/fapi/v1/premiumIndex"
+        payload = self._get_json(path, {"symbol": symbol}, API_LIMITS.premium_index_weight, futures_data=False)
+        if not isinstance(payload, dict):
+            raise RestSchemaError(f"{path}: 객체가 아니다: {payload!r}")
+        missing = [name for name in ("lastFundingRate", "nextFundingTime") if name not in payload]
+        if missing:
+            raise RestSchemaError(f"{path}: 응답에 필드가 없다 {missing}, 받은 필드 {sorted(payload)}")
+        return FundingInfo(symbol, _as_float(payload["lastFundingRate"], path), _as_ms(payload["nextFundingTime"], path))
 
     def fetch_bars(self, dataset: Dataset, symbol: str, window: TimeRange, server_time_ms: int) -> BarFetch:
         """1분봉 또는 프리미엄 인덱스 1분봉을 분할 요청한다(FR-1.3).

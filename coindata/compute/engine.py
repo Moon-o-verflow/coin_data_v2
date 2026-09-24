@@ -115,16 +115,21 @@ def resolve_anchor(conn: sqlite3.Connection, config: Config) -> int | None:
     return bounds.start_ms if bounds else None
 
 
-def load_input(conn: sqlite3.Connection, config: Config) -> ComputeInput:
+def load_input(conn: sqlite3.Connection, config: Config, until_ms: int | None = None) -> ComputeInput:
+    """계산 입력을 읽는다. `until_ms`가 있으면 그 시각 이전에 시작한 1분봉까지만 쓴다(FR-4.8).
+
+    기준 시각은 쓰는 마지막 1분봉의 `close_time + 1`이며, 모든 조회는 기준 시각에서 끝난다.
+    """
     symbol = config.data.symbol
     bounds = query.time_bounds(conn, Dataset.KLINE_1M, symbol)
     anchor = resolve_anchor(conn, config)
     if bounds is None or anchor is None:
         raise ComputeError("저장된 1분봉이 없다")
-    ref_time = bounds.end_ms + MINUTE_MS
-    klines = query.klines_between(conn, symbol, anchor, ref_time)
+    end = bounds.end_ms + MINUTE_MS if until_ms is None else until_ms
+    klines = query.klines_between(conn, symbol, anchor, end)
     if not klines:
-        raise ComputeError("시작점 이후 저장된 1분봉이 없다")
+        raise ComputeError("시작점 이후, 기준 시각 이전에 저장된 1분봉이 없다")
+    ref_time = klines[-1].open_time + MINUTE_MS
     premium_start = premium_load_start(config, ref_time)
     premium = query.premium_between(conn, symbol, premium_start, ref_time)
     metrics = query.metrics_between(conn, symbol, metrics_load_start(config, ref_time), ref_time)

@@ -151,6 +151,8 @@ def archive_file_name(dataset: Dataset, day: date) -> str:
     return f"{SYMBOL}-1m-{day.isoformat()}"
 
 
+FUNDING_RATE = "0.00012500"
+
 # ---------------------------------------------------------------------------
 # 가짜 바이낸스 서버
 # ---------------------------------------------------------------------------
@@ -192,6 +194,7 @@ class FakeBinance:
             "/fapi/v1/time": lambda p: {"serverTime": self.clock.now},
             "/fapi/v1/klines": lambda p: self._bars(Dataset.KLINE_1M, p),
             "/fapi/v1/premiumIndexKlines": lambda p: self._bars(Dataset.PREMIUM_INDEX_1M, p),
+            "/fapi/v1/premiumIndex": lambda p: self._funding(),
         }.get(parsed.path)
         if handler is None and parsed.path.startswith("/futures/data/"):
             return response(200, json.dumps(self._metrics(parsed.path, params)), {"x-mbx-used-weight-1m": "3"})
@@ -214,6 +217,13 @@ class FakeBinance:
                 data = data + b"corrupted"
             return response(200, data)
         return response(404, "<Error><Code>NoSuchKey</Code></Error>")
+
+    def _funding(self) -> dict[str, object]:
+        eight_hours = 8 * 60 * MINUTE_MS
+        return {
+            "symbol": SYMBOL, "markPrice": "3000.00", "indexPrice": "3000.50", "lastFundingRate": FUNDING_RATE,
+            "nextFundingTime": (self.clock.now // eight_hours + 1) * eight_hours, "time": self.clock.now,
+        }
 
     def _bars(self, dataset: Dataset, params: dict[str, str]) -> list[list[object]]:
         path = "/fapi/v1/klines" if dataset is Dataset.KLINE_1M else "/fapi/v1/premiumIndexKlines"

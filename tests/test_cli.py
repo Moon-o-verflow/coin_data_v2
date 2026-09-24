@@ -206,7 +206,7 @@ class CommandTest(CliTestCase):
             code, _ = self.run_cli("init")
         self.assertEqual(code, EXIT_CANNOT_RUN)
 
-    def test_status_and_summary(self) -> None:
+    def test_status(self) -> None:
         self.assertEqual(self.run_cli("status")[0], EXIT_CANNOT_RUN)
         self.run_cli("init")
         code, output = self.run_cli("status")
@@ -214,7 +214,6 @@ class CommandTest(CliTestCase):
         self.assertIn("kline_1m", output)
         self.assertIn("미해소 결측 (0건)", output)
         self.assertIn("마지막 실행: init", output)
-        self.assertEqual(self.run_cli("summary")[0], EXIT_CANNOT_RUN)
 
     def test_bad_config_cannot_run(self) -> None:
         self.config.write_text("[data]\nunknown = 1\n", encoding="utf-8")

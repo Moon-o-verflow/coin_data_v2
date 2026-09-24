@@ -92,6 +92,15 @@ class LatestMetric:
 
 
 @dataclass(frozen=True, slots=True)
+class FundingInfo:
+    """`/fapi/v1/premiumIndex`의 펀딩 정보 (A.5.3). 판단 지표가 아니라 비용 정보다."""
+
+    symbol: str
+    last_funding_rate: float
+    next_funding_time: int
+
+
+@dataclass(frozen=True, slots=True)
 class TimeRange:
     start_ms: int
     end_ms: int
@@ -229,3 +238,25 @@ class ArchiveStatusCount:
     dataset: Dataset
     status: ArchiveFileStatus
     count: int
+
+
+# ---------------------------------------------------------------------------
+# 요약 기록
+# ---------------------------------------------------------------------------
+
+
+class SummaryTrigger(enum.Enum):
+    MANUAL = "manual"  # 현재 시점 요약
+    HISTORICAL = "historical"  # 과거 시점 요약 (FR-4.8)
+
+
+@dataclass(frozen=True, slots=True)
+class SummaryRecord:
+    summary_id: str
+    created_at: int
+    trigger: SummaryTrigger
+    ref_time: int
+    ref_price: float
+    params_hash: str
+    state: str  # FR-4.4 비교용 상태값 JSON
+    file_path: str

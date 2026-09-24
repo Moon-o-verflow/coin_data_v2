@@ -102,6 +102,7 @@ class IngestFlow:
         self._run_start: dict[Dataset, int] = {}
         self._server_anchor: tuple[int, int] | None = None  # (서버 시각, 그때의 로컬 시각)
         self._rest_unavailable = False
+        self.in_progress: dict[Dataset, Row] = {}  # 진행 중인 봉 (D-8). 저장하지 않고 요약의 현재가에만 쓴다
 
     # --- 시각 -------------------------------------------------------------
 
@@ -198,6 +199,8 @@ class IngestFlow:
             return
         result = self._rest.fetch_bars(dataset, self.symbol, window, server_time)
         self._store_rest(dataset, result.rows)
+        if result.in_progress is not None:
+            self.in_progress[dataset] = result.in_progress
         ok_end = window.end_ms if result.failure is None else result.failure.range.start_ms - 1
         self._record(dataset, (ALL_FIELDS,), window.start_ms, ok_end, ok=True)
         if result.failure is not None:

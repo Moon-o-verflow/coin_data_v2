@@ -20,6 +20,8 @@ from coindata.models import (
     RunMode,
     RunRecord,
     RunStatus,
+    SummaryRecord,
+    SummaryTrigger,
     TimeRange,
 )
 
@@ -145,3 +147,37 @@ def latest_metrics(conn: sqlite3.Connection, symbol: str, until_ms: int) -> list
         ).fetchone()
         result.append(LatestMetric(name, row[0], row[1]) if row else LatestMetric(name, None, None))
     return result
+
+
+def gaps_overlapping(conn: sqlite3.Connection, symbol: str, start_ms: int, end_ms: int) -> list[OpenGap]:
+    """[start_ms, end_ms]와 겹치는 미해소 결측."""
+    return [g for g in open_gaps(conn, symbol) if g.range.start_ms <= end_ms and g.range.end_ms >= start_ms]
+
+
+def summary_exists(conn: sqlite3.Connection, summary_id: str) -> bool:
+    return conn.execute("SELECT 1 FROM summary_log WHERE summary_id = ?", (summary_id,)).fetchone() is not None
+
+
+def previous_summary(conn: sqlite3.Connection, trigger: SummaryTrigger, ref_time: int) -> SummaryRecord | None:
+    """FR-4.4, FR-4.8의 직전 요약.
+
+    - manual: manual 기록 중 가장 최근에 만든 것.
+    - historical: historical 기록 중 기준 시각이 `ref_time`보다 앞선 것 가운데 기준 시각이 가장 늦은 것
+      (같으면 생성 시각이 늦은 것).
+    """
+    columns = 'summary_id, created_at, "trigger", ref_time, ref_price, params_hash, state, file_path'
+    if trigger is SummaryTrigger.MANUAL:
+        row = conn.execute(
+            f'SELECT {columns} FROM summary_log WHERE "trigger" = ? ORDER BY created_at DESC, summary_id DESC LIMIT 1',
+            (trigger.value,),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            f'SELECT {columns} FROM summary_log WHERE "trigger" = ? AND ref_time < ? '
+            "ORDER BY ref_time DESC, created_at DESC, summary_id DESC LIMIT 1",
+            (trigger.value, ref_time),
+        ).fetchone()
+    if row is None:
+        return None
+    sid, created, trig, ref, price, params_hash, state, path = row
+    return SummaryRecord(sid, created, SummaryTrigger(trig), ref, price, params_hash, state, path)
