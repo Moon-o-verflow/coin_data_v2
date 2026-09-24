@@ -230,13 +230,22 @@ class StructureTest(unittest.TestCase):
 
     def test_bos_and_broken_once(self) -> None:
         swings = [swing(LOW, 1, 0, 1), swing(HIGH, 5, 1, 2), swing(LOW, 2, 2, 3), swing(HIGH, 6, 3, 4)]
-        s = self._closes([3, 3, 3, 3, 4, 6, 7, 5.5, 7])  # 봉 6에서 6 초과(봉 5는 6과 같음 → 돌파 아님)
+        # 봉 6에서 6 초과(봉 5는 6과 같음 → 돌파 아님). 봉 8에서 더 오래된 고점 5를 다시 넘지만 대상이 아니다(A.3.4).
+        s = self._closes([3, 3, 3, 3, 4, 6, 7, 5, 7])
         r = analyze_structure(s, swings, [1.0] * 9, 1.5, 2)
         self.assertEqual([(b.bar_index, b.side, b.break_kind) for b in r.breaks], [(6, ABOVE, "BOS")])
         self.assertEqual(r.broken, frozenset({3}))
         self.assertAlmostEqual(r.breaks[0].close_beyond_atr, 1.0)
         self.assertEqual(r.states[3], INSUFFICIENT)
         self.assertEqual(r.states[4], HHHL)
+
+    def test_new_swing_replaces_target(self) -> None:
+        swings = [swing(LOW, 1, 0, 1), swing(HIGH, 5, 1, 2), swing(HIGH, 4, 3, 5)]
+        s = self._closes([3, 3, 3, 6, 3, 3, 4.5, 5.5])
+        r = analyze_structure(s, swings, [1.0] * 8, 1.5, 2)
+        # 봉 3에서 고점 5 돌파 → 대상 없음. 봉 5에 확정된 고점 4가 새 대상 → 봉 6에서 돌파. 봉 7은 대상 없음.
+        self.assertEqual([(b.bar_index, b.swing.price) for b in r.breaks], [(3, 5), (6, 4)])
+        self.assertEqual(r.broken, frozenset({1, 2}))
 
     def test_mss_needs_displacement(self) -> None:
         swings = [swing(LOW, 1, 0, 1), swing(HIGH, 5, 1, 2), swing(LOW, 2, 2, 3), swing(HIGH, 6, 3, 4)]
@@ -286,6 +295,14 @@ class RegimeTest(unittest.TestCase):
         self.assertEqual([(s.bar_index, s.trigger) for s in r.starts], [(5, "rapid_reversal")])
         breaks = [Break(1, ABOVE, "BOS", sw, None, None, HHHL), Break(4, BELOW, "MSS", sw, None, None, HHHL)]
         self.assertEqual(shock([None] * 8, breaks, cfg).starts, ())
+
+
+class StateChangeEventTest(unittest.TestCase):
+    def test_shock_entry_not_reported_but_exit_is(self) -> None:
+        s = series_of([bar(i, 1, 2, 1, 2) for i in range(4)])
+        states = ["trend", "shock", "shock", "range"]
+        got = [(e.measures.from_, e.measures.to) for e in ev.state_change_events(s, states, [0.6, 0.6, 0.2, 0.2], 3, 4, "efficiency")]
+        self.assertEqual(got, [("shock", "range")])
 
 
 class DerivativesTest(unittest.TestCase):

@@ -69,6 +69,8 @@ smoothing_tf = "15m"
 pct_lookback = 672
 
 [levels]
+swing_timeframes = ["15m", "1h"]
+normalize_tf = "1h"
 vwap_window_minutes = 1440
 range_window_minutes = 1440
 swing_count = 5

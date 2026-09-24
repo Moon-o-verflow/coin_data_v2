@@ -44,6 +44,14 @@ class ConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "rate_limit_ratio"):
             self._load("[runtime]\nrate_limit_ratio = 1.5\n")
 
+    def test_timeframe_lists_checked(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "levels.normalize_tf"):
+            self._load('[indicators]\ntimeframes = ["15m", "1d"]\n[levels]\nswing_timeframes = ["15m"]\n')
+        with self.assertRaisesRegex(ConfigError, "타임프레임 표기"):
+            self._load('[levels]\nnormalize_tf = "1x"\n')
+        with self.assertRaisesRegex(ConfigError, "events.report_bars"):
+            self._load('[events]\nreport_bars = { "15m" = 16 }\n')
+
     def test_missing_file_rejected(self) -> None:
         with self.assertRaises(ConfigError):
             load_config(Path("/nonexistent/coindata.toml"))

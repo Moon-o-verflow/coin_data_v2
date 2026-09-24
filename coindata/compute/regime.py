@@ -9,6 +9,8 @@ from coindata.compute.indicators import Candle
 from coindata.compute.structure import ABOVE, BELOW, Break
 from coindata.config import RegimeConfig
 
+SHOCK = "shock"  # shock 활성 중 efficiency_state를 덮어쓰는 값 (A.4.4)
+
 
 def efficiency_state(er: float | None, trend: float, range_: float) -> str | None:
     if er is None:

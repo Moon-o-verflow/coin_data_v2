@@ -8,9 +8,6 @@ from dataclasses import dataclass
 from coindata.compute.zigzag import HIGH, LOW, Swing
 from coindata.models import MINUTE_MS, Kline
 
-# A.7.1의 출처 정의. 조정 대상 수치가 아니라 정의의 일부다.
-SWING_SOURCE_TFS: tuple[str, ...] = ("15m", "1h")
-NORMALIZE_TF = "1h"  # A.7.2
 VWAP = "vwap_24h"
 HIGH_24H = "high_24h"
 LOW_24H = "low_24h"
@@ -61,12 +58,11 @@ class LevelMember:
 
 
 def candidates(
-    swings_by_tf: dict[str, tuple[Sequence[Swing], frozenset[int]]], stats: WindowStats, swing_count: int
+    swings_by_tf: Sequence[tuple[str, Sequence[Swing], frozenset[int]]], stats: WindowStats, swing_count: int
 ) -> list[LevelMember]:
-    """A.7.1. `swings_by_tf`는 TF별 (확정 스윙 목록, 돌파된 스윙 인덱스)다."""
+    """A.7.1. `swings_by_tf`는 레벨 스윙 TF별 (TF, 확정 스윙 목록, 돌파된 스윙 인덱스)다."""
     members: list[LevelMember] = []
-    for tf in SWING_SOURCE_TFS:
-        swings, broken = swings_by_tf[tf]
+    for tf, swings, broken in swings_by_tf:
         for kind in (HIGH, LOW):
             picked = [i for i, s in enumerate(swings) if s.type == kind]
             picked = picked[max(0, len(picked) - swing_count) :]
@@ -120,7 +116,7 @@ def build_level(members: Sequence[LevelMember], zone_width: float, atr: float, r
 
 @dataclass(frozen=True, slots=True)
 class LevelsResult:
-    atr: float | None  # 정규화에 쓴 기준 시각의 1h ATR
+    atr: float | None  # 정규화에 쓴 기준 시각의 정규화 TF ATR
     all_levels: tuple[Level, ...]  # 병합된 전체 클러스터, 가격 오름차순
     reported: tuple[Level, ...]  # ref_price 위아래 각각 가장 가까운 R개, 가격 오름차순
 
@@ -128,7 +124,7 @@ class LevelsResult:
 def levels(
     members: Sequence[LevelMember], atr: float | None, ref_price: float, merge_dist: float, zone_width: float, each_side: int
 ) -> LevelsResult:
-    """A.7.2: 1h ATR이 없으면(또는 0이면) 레벨 목록 전체가 없다."""
+    """A.7.2: 정규화 ATR이 없으면(또는 0이면) 레벨 목록 전체가 없다."""
     if not atr:
         return LevelsResult(None, (), ())
     built = [build_level(c, zone_width, atr, ref_price) for c in merge(members, merge_dist, atr)]

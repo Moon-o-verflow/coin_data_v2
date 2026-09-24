@@ -13,15 +13,13 @@ from coindata.compute import derivatives as deriv
 from coindata.compute import events as ev
 from coindata.compute.indicators import Candle, atr, candle, efficiency_ratio, parkinson, rolling_percentile
 from coindata.compute.levels import (
-    NORMALIZE_TF,
-    SWING_SOURCE_TFS,
     LevelsResult,
     WindowStats,
     candidates,
     levels,
     window_stats,
 )
-from coindata.compute.regime import duration, efficiency_state, shock, volatility_state
+from coindata.compute.regime import SHOCK, duration, efficiency_state, shock, volatility_state
 from coindata.compute.series import BarSeries, Measured, measure, parse_tf, synthesize
 from coindata.compute.structure import Retracement, analyze_structure, retracement
 from coindata.compute.zigzag import ZigzagResult, zigzag
@@ -29,7 +27,6 @@ from coindata.config import Config
 from coindata.models import MINUTE_MS, Dataset, Kline, LatestMetric, MetricsRow, PremiumKline
 from coindata.store import query
 
-SHOCK = "shock"
 METRICS_STEP_MS = Dataset.METRICS_5M.interval_ms
 
 
@@ -161,15 +158,15 @@ def metrics_load_start(config: Config, ref_time: int) -> int:
 def analyze(inp: ComputeInput, config: Config) -> Analysis:
     ref_price = inp.ref_price
     wanted = list(config.indicators.timeframes)
-    computed = wanted + [tf for tf in SWING_SOURCE_TFS if tf not in wanted]
-    per_tf = {tf: _analyze_tf(synthesize(tf, inp.klines, inp.anchor_ms, inp.ref_time), config, ref_price) for tf in computed}
+    # 모든 경로 의존 계산(ATR, ZigZag, 구조·broken, shock, 레짐 지속)은 고정 시작점부터의 전체 봉으로 한다(A.1.8).
+    per_tf = {tf: _analyze_tf(synthesize(tf, inp.klines, inp.anchor_ms, inp.ref_time), config, ref_price) for tf in wanted}
 
     stats = window_stats(inp.klines, inp.ref_time, config.levels.vwap_window_minutes, config.levels.range_window_minutes)
-    members = candidates(
-        {tf: (per_tf[tf].zigzag.swings, per_tf[tf].broken) for tf in SWING_SOURCE_TFS}, stats, config.levels.swing_count
-    )
     lv = config.levels
-    level_result = levels(members, per_tf[NORMALIZE_TF].atr.value, ref_price, lv.merge_dist, lv.zone_width, lv.report_each_side)
+    members = candidates(
+        [(tf, per_tf[tf].zigzag.swings, per_tf[tf].broken) for tf in lv.swing_timeframes], stats, lv.swing_count
+    )
+    level_result = levels(members, per_tf[lv.normalize_tf].atr.value, ref_price, lv.merge_dist, lv.zone_width, lv.report_each_side)
 
     events: list[ev.Event] = []
     results = []

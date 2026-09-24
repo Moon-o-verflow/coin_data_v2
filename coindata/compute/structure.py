@@ -69,7 +69,8 @@ def analyze_structure(
     """봉을 순서대로 보며 구조 상태를 갱신하고 돌파를 판정한다.
 
     - 구조 상태는 그 봉에서 확정된 스윙까지 반영한 값이다(새 스윙이 확정될 때만 바뀐다).
-    - 돌파 대상은 확정된 봉의 다음 봉부터, 아직 돌파되지 않은 가장 최근 스윙 고점·저점이다.
+    - 돌파 대상은 유형별로 최대 하나다. 가장 최근 확정 스윙이 확정 봉의 다음 봉부터 대상이 되고,
+      돌파되면 그쪽 대상은 없음이 된다. 같은 유형의 새 스윙이 확정되면 그것으로 바뀐다(A.3.4).
     """
     bars = series.bars
     bodies = [abs(b.close - b.open) if b is not None else None for b in bars]
@@ -81,12 +82,14 @@ def analyze_structure(
     breaks: list[Break] = []
     broken: set[int] = set()
     known: list[int] = []  # 이미 확정된 스윙(확정 봉 이전)
+    targets: dict[str, int | None] = {HIGH: None, LOW: None}
     state = INSUFFICIENT
     for t, bar in enumerate(bars):
         prev = bars[t - 1] if t > 0 else None
         if bar is not None and prev is not None:
             for side in (ABOVE, BELOW):
-                target = _latest_unbroken(swings, known, broken, HIGH if side == ABOVE else LOW)
+                kind = HIGH if side == ABOVE else LOW
+                target = targets[kind]
                 if target is None:
                     continue
                 level = swings[target].price
@@ -94,6 +97,7 @@ def analyze_structure(
                 if not crossed:
                     continue
                 broken.add(target)
+                targets[kind] = None
                 mean_body = trailing_mean(bodies, t, displacement_lookback)
                 mult = abs(bar.close - bar.open) / mean_body if mean_body else None
                 prev_atr = atr_values[t - 1]
@@ -101,18 +105,13 @@ def analyze_structure(
                 displaced = mult is not None and mult >= displacement_mult
                 current_state = structure_state([swings[i] for i in known + by_confirmation.get(t, [])])
                 breaks.append(Break(t, side, _classify(side, current_state, displaced), swings[target], beyond, mult, current_state))
+        for i in by_confirmation.get(t, []):
+            targets[swings[i].type] = i
         known += by_confirmation.get(t, [])
         if t in by_confirmation:
             state = structure_state([swings[i] for i in known])
         states.append(state)
     return StructureResult(tuple(states), tuple(breaks), frozenset(broken))
-
-
-def _latest_unbroken(swings: Sequence[Swing], known: Sequence[int], broken: set[int], kind: str) -> int | None:
-    for i in reversed(known):
-        if swings[i].type == kind and i not in broken:
-            return i
-    return None
 
 
 @dataclass(frozen=True, slots=True)

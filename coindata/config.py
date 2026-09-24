@@ -169,6 +169,8 @@ class DerivativesConfig:
 
 @dataclass(frozen=True, slots=True)
 class LevelsConfig:
+    swing_timeframes: tuple[str, ...] = ("15m", "1h")  # A.7.1
+    normalize_tf: str = "1h"  # A.7.2
     vwap_window_minutes: int = 1440
     range_window_minutes: int = 1440
     swing_count: int = 5
@@ -376,6 +378,8 @@ def _validate_timeframes(config: Config) -> list[str]:
         "regime.shock.timeframes": config.regime.shock.timeframes,
         "events.level.timeframes": config.events.level.timeframes,
         "events.volume_spike.timeframes": config.events.volume_spike.timeframes,
+        "levels.swing_timeframes": config.levels.swing_timeframes,
+        "levels.normalize_tf": (config.levels.normalize_tf,),
         "derivatives.quadrant.periods": config.derivatives.quadrant.periods,
         "derivatives.premium.windows": config.derivatives.premium.windows,
         "derivatives.premium.smoothing_tf": (config.derivatives.premium.smoothing_tf,),
@@ -385,7 +389,13 @@ def _validate_timeframes(config: Config) -> list[str]:
         bad = [tf for tf in values if not _is_timeframe(tf)]
         if bad:
             problems.append(f"{key}: 타임프레임 표기가 아니다: {', '.join(bad)}")
-    for key in ("regime.shock.timeframes", "events.level.timeframes", "events.volume_spike.timeframes"):
+    for key in (
+        "regime.shock.timeframes",
+        "events.level.timeframes",
+        "events.volume_spike.timeframes",
+        "levels.swing_timeframes",
+        "levels.normalize_tf",
+    ):
         outside = [tf for tf in groups[key] if tf not in timeframes]
         if outside:
             problems.append(f"{key}: indicators.timeframes에 없는 TF: {', '.join(outside)}")

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 from coindata.compute.indicators import trailing_mean
 from coindata.compute.levels import Level, build_level, members_known_at
-from coindata.compute.regime import ShockStart
+from coindata.compute.regime import SHOCK, ShockStart
 from coindata.compute.series import BarSeries
 from coindata.compute.structure import Break
 from coindata.compute.zigzag import Swing
@@ -179,11 +179,16 @@ def state_change_events(
     report_bars: int,
     kind: str,
 ) -> list[Event]:
-    """`kind`는 efficiency / volatility. 이웃한 두 봉의 상태가 모두 있고 서로 다를 때만 발생한다."""
+    """`kind`는 efficiency / volatility. 이웃한 두 봉의 상태가 모두 있고 서로 다를 때만 발생한다.
+
+    shock으로 바뀌는 효율성 변화는 `shock_start`와 같은 사실이므로 내지 않는다. shock 종료는 낸다(A.8.3).
+    """
     events = []
     for i in range(max(1, last - report_bars + 1), last + 1):
         before, after = states[i - 1], states[i]
         if before is None or after is None or before == after:
+            continue
+        if kind == "efficiency" and after == SHOCK:
             continue
         if kind == "efficiency":
             measures: Measures = EfficiencyChangeMeasures(before, after, raw[i])
