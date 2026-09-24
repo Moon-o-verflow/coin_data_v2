@@ -104,10 +104,39 @@ def check_mapping(archive: ArchiveClient, rest: BinanceRestClient, symbol: str, 
         best = METRICS_FIELDS[max(range(len(rates)), key=rates.__getitem__)]
         if best != archive_field or max(rates) < 0.99:
             all_ok = False
-    print("  결론: 8.4 매핑표가 " + ("맞다 (모든 컬럼이 같은 이름의 REST 필드와 99% 이상 일치)." if all_ok else "틀렸거나 불확실하다. 위 표를 PRD 15.7에 기록하고 매핑을 다시 정한다."))
+    print("  결론: 8.4 매핑표가 " + ("맞다 (모든 컬럼이 같은 이름의 REST 필드와 99% 이상 일치)." if all_ok else "틀렸거나 불확실하다. 아래 필드별 상세를 PRD 15.7에 기록한다."))
+
+    print("  필드별 상세: 같은 이름끼리, 필드마다 가장 잘 맞는 시각 차이와 값 샘플")
+    for name in METRICS_FIELDS:
+        scans = []
+        for k in OFFSETS:
+            strict, n = _match_rate(archive_rows, rest_rows, name, name, k * MINUTE_MS)
+            loose, _ = _match_rate(archive_rows, rest_rows, name, name, k * MINUTE_MS, 1e-2)
+            if n:
+                scans.append((strict, loose, -abs(k), k))
+        if not scans:
+            print(f"  {name}: 비교할 값 없음")
+            continue
+        strict, loose, _, k = max(scans)
+        print(f"  {name}: 최적 k={k:+d}분, 일치율 {strict * 100:.1f}% (허용오차 0.01%), {loose * 100:.1f}% (허용오차 1%)")
+        diffs = []
+        samples = []
+        for ts, row in sorted(archive_rows.items()):
+            other = rest_rows.get(ts + k * MINUTE_MS)
+            a, b = getattr(row, name), getattr(other, name) if other else None
+            if a is None or b is None:
+                continue
+            diffs.append(abs(a - b) / max(abs(a), abs(b), 1e-12))
+            if len(samples) < 3:
+                samples.append(f"{format_ms(ts)} 아카이브 {a!r} / REST {b!r}")
+        print(f"    상대 오차 중앙값 {statistics.median(diffs) * 100:.4f}%, 최대 {max(diffs) * 100:.4f}%")
+        for sample in samples:
+            print(f"    {sample}")
 
 
-def _match_rate(archive_rows: dict, rest_rows: dict, archive_field: str, rest_field: str, shift_ms: int) -> tuple[float, int]:
+def _match_rate(
+    archive_rows: dict, rest_rows: dict, archive_field: str, rest_field: str, shift_ms: int, tolerance: float = RELATIVE_TOLERANCE
+) -> tuple[float, int]:
     matched = total = 0
     for ts, row in archive_rows.items():
         other = rest_rows.get(ts + shift_ms)
@@ -115,7 +144,7 @@ def _match_rate(archive_rows: dict, rest_rows: dict, archive_field: str, rest_fi
         if a is None or b is None:
             continue
         total += 1
-        if abs(a - b) <= RELATIVE_TOLERANCE * max(abs(a), abs(b), 1e-12):
+        if abs(a - b) <= tolerance * max(abs(a), abs(b), 1e-12):
             matched += 1
     return (matched / total if total else 0.0), total
 
