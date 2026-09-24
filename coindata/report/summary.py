@@ -342,6 +342,8 @@ def _candle(row: Any, f: _Fmt) -> dict[str, Any]:
         "body_atr": f.ratio(c.body_atr),
         "range_atr": f.ratio(c.range_atr),
         "null_reason": None,
+        "ratio_null_reason": row.ratio_null_reason,
+        "atr_null_reason": row.atr_null_reason,
     }
 
 

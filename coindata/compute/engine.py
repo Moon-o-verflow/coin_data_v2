@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
 
@@ -20,7 +21,7 @@ from coindata.compute.levels import (
     window_stats,
 )
 from coindata.compute.regime import SHOCK, duration, efficiency_state, shock, volatility_state
-from coindata.compute.series import BarSeries, Measured, measure, parse_tf, synthesize
+from coindata.compute.series import ZERO_DENOMINATOR, BarSeries, Measured, measure, parse_tf, synthesize
 from coindata.compute.structure import Retracement, analyze_structure, retracement
 from coindata.compute.zigzag import ZigzagResult, zigzag
 from coindata.config import Config
@@ -55,6 +56,8 @@ class CandleRow:
     bar_time: int
     candle: Candle | None  # 부재 봉이면 None
     missing_ratio: float
+    ratio_null_reason: str | None  # 꼬리·몸통 비율이 없을 때의 사유
+    atr_null_reason: str | None  # ATR 배수가 없을 때의 사유 (직전 봉 ATR 기준, A.1.7)
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,7 +155,8 @@ def premium_load_start(config: Config, ref_time: int) -> int:
 def metrics_load_start(config: Config, ref_time: int) -> int:
     longest = max((parse_tf(p) for p in config.derivatives.quadrant.periods), default=0)
     report = config.events.quadrant_change.report_minutes * MINUTE_MS
-    return ref_time - (report + longest + METRICS_STEP_MS)
+    # 보고 기간과, 그 앞에서 직전 확정 4분면을 찾는 같은 길이의 구간(A.8.3), 각 시각의 기간 P 비교값.
+    return ref_time - (2 * report + longest + METRICS_STEP_MS)
 
 
 # ---------------------------------------------------------------------------
@@ -226,8 +230,7 @@ def _analyze_tf(series: BarSeries, config: Config, ref_price: float) -> TfAnalys
 
     k = ind.candle.report_bars
     candle_rows = tuple(
-        CandleRow(series.open_time(i), candles[i], bars[i].missing_ratio if bars[i] is not None else 1.0)  # type: ignore[union-attr]
-        for i in range(max(0, last - k + 1), last + 1)
+        _candle_row(series, i, candles[i], atr_values, ind.atr.n) for i in range(max(0, last - k + 1), last + 1)
     )
 
     report_bars = config.events.report_bars.get(series.tf, 0)
@@ -264,6 +267,20 @@ def _analyze_tf(series: BarSeries, config: Config, ref_price: float) -> TfAnalys
         candles=candle_rows,
         events=tuple(tf_events),
     )
+
+
+def _candle_row(
+    series: BarSeries, i: int, c: Candle | None, atr_values: Sequence[float | None], atr_n: int
+) -> CandleRow:
+    bar = series.bars[i]
+    if bar is None or c is None:
+        return CandleRow(series.open_time(i), None, 1.0, None, None)
+    ratio_reason = ZERO_DENOMINATOR if c.body_ratio is None else None
+    atr_reason = None
+    if c.body_atr is None:
+        prev = atr_values[i - 1] if i > 0 else None
+        atr_reason = ZERO_DENOMINATOR if prev == 0 else measure(series, i - 1, atr_n, prev).null_reason
+    return CandleRow(series.open_time(i), c, bar.missing_ratio, ratio_reason, atr_reason)
 
 
 def _derivatives(inp: ComputeInput, config: Config) -> tuple[DerivativesResult, list[ev.Event]]:
@@ -304,19 +321,42 @@ def _derivatives(inp: ComputeInput, config: Config) -> tuple[DerivativesResult, 
     if latest_ts is not None:
         current = [deriv.quadrant_at(latest_ts, p, ms, oi_by_ts, close_by_open, q.oi_band, q.px_band) for p, ms in periods]
         report_ms = config.events.quadrant_change.report_minutes * MINUTE_MS
-        for r in rows:
-            if inp.ref_time - r.ts >= report_ms:
-                continue
-            for p, ms in periods:
-                now = deriv.quadrant_at(r.ts, p, ms, oi_by_ts, close_by_open, q.oi_band, q.px_band)
-                before = deriv.quadrant_at(r.ts - METRICS_STEP_MS, p, ms, oi_by_ts, close_by_open, q.oi_band, q.px_band)
-                if now.quadrant is None or before.quadrant is None or now.quadrant == before.quadrant:
-                    continue
-                events.append(
-                    ev.Event(
-                        "quadrant_change", ev.DERIVATIVES, "5m", r.ts, (latest_ts - r.ts) // METRICS_STEP_MS,
-                        ev.QuadrantChangeMeasures(p, before.quadrant, now.quadrant, now.d_oi, now.d_px),
-                    )
-                )
+        for p, ms in periods:
+            events += _quadrant_changes(
+                p, ms, oi_by_ts, close_by_open, q.oi_band, q.px_band, inp.ref_time, latest_ts, report_ms
+            )
     result = DerivativesResult(prem, latest_ts, tuple(current), inp.latest_metrics)
     return result, events
+
+
+def _quadrant_changes(
+    period: str,
+    period_ms: int,
+    oi_by_ts: dict[int, float | None],
+    close_by_open: dict[int, float],
+    oi_band: float,
+    px_band: float,
+    ref_time: int,
+    latest_ts: int,
+    report_ms: int,
+) -> list[ev.Event]:
+    """A.8.3: 확정 4분면이 직전 확정 4분면과 다를 때만 낸다. `indeterminate`와 `null`은 건너뛴다.
+
+    직전 확정 4분면은 보고 기간 앞의 같은 길이 구간에서부터 찾는다.
+    """
+    events: list[ev.Event] = []
+    first = (ref_time - 2 * report_ms) // METRICS_STEP_MS * METRICS_STEP_MS + METRICS_STEP_MS
+    last_determinate: str | None = None
+    for ts in range(first, latest_ts + 1, METRICS_STEP_MS):
+        point = deriv.quadrant_at(ts, period, period_ms, oi_by_ts, close_by_open, oi_band, px_band)
+        if point.quadrant is None or point.quadrant == deriv.INDETERMINATE:
+            continue
+        if last_determinate is not None and point.quadrant != last_determinate and ref_time - ts < report_ms:
+            events.append(
+                ev.Event(
+                    "quadrant_change", ev.DERIVATIVES, "5m", ts, (latest_ts - ts) // METRICS_STEP_MS,
+                    ev.QuadrantChangeMeasures(period, last_determinate, point.quadrant, point.d_oi, point.d_px),
+                )
+            )
+        last_determinate = point.quadrant
+    return events

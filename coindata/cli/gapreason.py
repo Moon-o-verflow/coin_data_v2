@@ -6,7 +6,8 @@ store가 찾은 빠진 구간을, 이번 실행의 수집 결과(요청 시도�
 판정 순서:
 1. 이번 실행에서 이 조각을 포함한 요청이 실패했다 → `rest_failed`
 2. 그 날의 아카이브 파일이 적재되었다 → `source_gap` (파일 안에서 행이나 값이 비어 있다)
-3. 이번 실행에서 이 조각을 포함한 요청이 성공했다 → `source_gap` (응답에 데이터가 없다)
+3. 이번 실행에서 이 조각을 포함한 요청이 성공했다(응답에 데이터가 없다) → 아카이브 공개 예상 시점 전이면
+   `awaiting_archive`, 지났으면 `source_gap`
 4. 그 날의 아카이브가 체크섬 검증에 실패했다 → `checksum_failed`
 5. 아카이브 공개 예상 시점이 지나지 않았다 → 결측이 아니다(기록하지 않는다)
 6. metrics이고 REST 보관 기간이 지났다 → `retention_expired`
@@ -102,11 +103,13 @@ def _reason(dataset: Dataset, piece: TimeRange, attempts: Sequence[Attempt], ctx
         return GapReason.REST_FAILED
     day = archive_day_of(dataset, piece.start_ms)
     status = ctx.archive_status.get(day)
-    if status is ArchiveFileStatus.LOADED or covering:
+    publish_due_ms = day_start_ms(day) + DAY_MS * (1 + ctx.publish_delay_days)
+    if status is ArchiveFileStatus.LOADED:
         return GapReason.SOURCE_GAP
+    if covering:
+        return GapReason.AWAITING_ARCHIVE if ctx.now_ms < publish_due_ms else GapReason.SOURCE_GAP
     if status is ArchiveFileStatus.CHECKSUM_FAILED:
         return GapReason.CHECKSUM_FAILED
-    publish_due_ms = day_start_ms(day) + DAY_MS * (1 + ctx.publish_delay_days)
     if ctx.now_ms < publish_due_ms:
         return None
     if dataset is Dataset.METRICS_5M and piece.end_ms < ctx.now_ms - API_LIMITS.futures_data_retention_ms:

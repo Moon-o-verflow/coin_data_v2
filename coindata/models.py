@@ -172,6 +172,7 @@ class GapReason(enum.Enum):
     CHECKSUM_FAILED = "checksum_failed"
     SOURCE_GAP = "source_gap"
     REST_FAILED = "rest_failed"
+    AWAITING_ARCHIVE = "awaiting_archive"  # REST에 없고 아카이브 공개 전. 아카이브 적재 후 다시 판정한다
 
 
 @dataclass(frozen=True, slots=True)

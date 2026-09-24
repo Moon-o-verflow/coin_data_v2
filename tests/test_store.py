@@ -21,7 +21,7 @@ from coindata.models import (
 )
 from coindata.store import gaps, query, writer
 from coindata.store.db import open_db
-from coindata.store.schema import ensure_schema
+from coindata.store.schema import SCHEMA_VERSION, ensure_schema
 from tests.fakes import SYMBOL, kline_values
 
 MIN = 60_000
@@ -59,12 +59,37 @@ class SchemaTest(StoreTestCase):
         self.conn.execute("PRAGMA user_version = 1")
         self.conn.commit()
         ensure_schema(self.conn)
-        self.assertEqual(self.conn.execute("PRAGMA user_version").fetchone()[0], 2)
+        self.assertEqual(self.conn.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
         writer.insert_summary(
             self.conn, SummaryRecord("B", 5, SummaryTrigger.HISTORICAL, 4, 3.0, "h", "{}", "b.json")
         )
         self.assertEqual(self.conn.execute('SELECT summary_id, "trigger" FROM summary_log ORDER BY summary_id').fetchall(),
                          [("A", "manual"), ("B", "historical")])
+
+    def test_migrates_v2_data_gap(self) -> None:
+        self.conn.execute("DROP TABLE data_gap")
+        self.conn.execute(
+            "CREATE TABLE data_gap (id INTEGER PRIMARY KEY, dataset TEXT NOT NULL, symbol TEXT NOT NULL, "
+            "field TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL CHECK (end_ms >= start_ms), "
+            "reason TEXT NOT NULL CHECK (reason IN ('source_gap')), detected_at INTEGER NOT NULL, resolved_at INTEGER)"
+        )
+        self.conn.execute(
+            "CREATE UNIQUE INDEX ux_data_gap_open ON data_gap (dataset, symbol, field, start_ms) WHERE resolved_at IS NULL"
+        )
+        self.conn.execute("INSERT INTO data_gap VALUES (7, 'kline_1m', 'ETHUSDT', '*', 1, 2, 'source_gap', 3, NULL)")
+        self.conn.execute("PRAGMA user_version = 2")
+        self.conn.commit()
+        ensure_schema(self.conn)
+        self.conn.execute(
+            "INSERT INTO data_gap (dataset, symbol, field, start_ms, end_ms, reason, detected_at) "
+            "VALUES ('kline_1m', 'ETHUSDT', '*', 5, 6, 'awaiting_archive', 4)"
+        )
+        self.assertEqual(self.conn.execute("SELECT id, reason FROM data_gap ORDER BY id").fetchall()[0], (7, "source_gap"))
+        with self.assertRaises(sqlite3.IntegrityError):  # 부분 고유 인덱스가 다시 만들어졌다
+            self.conn.execute(
+                "INSERT INTO data_gap (dataset, symbol, field, start_ms, end_ms, reason, detected_at) "
+                "VALUES ('kline_1m', 'ETHUSDT', '*', 1, 9, 'source_gap', 4)"
+            )
 
     def test_schema_is_idempotent(self) -> None:
         ensure_schema(self.conn)

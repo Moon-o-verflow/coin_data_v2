@@ -64,10 +64,16 @@ class ClassifyTest(unittest.TestCase):
         missing = TimeRange(yesterday, yesterday + 10 * MIN)
         self.assertEqual(classify_missing(Dataset.KLINE_1M, SYMBOL, ALL_FIELDS, missing, ctx()), [])
 
-    def test_successful_request_without_data_is_source_gap(self) -> None:
-        yesterday = ms("2026-09-23 00:00:00")
+    def test_successful_request_without_data_before_archive_is_awaiting(self) -> None:
+        yesterday = ms("2026-09-23 00:00:00")  # 아카이브 공개 예상 시점(09-26 00:00) 전
         missing = TimeRange(yesterday, yesterday + 10 * MIN)
         attempts = [Attempt(Dataset.KLINE_1M, (ALL_FIELDS,), TimeRange(yesterday, NOW - NOW % MIN), ok=True)]
+        result = classify_missing(Dataset.KLINE_1M, SYMBOL, ALL_FIELDS, missing, ctx(attempts=attempts))
+        self.assertEqual(reasons(result), [(missing.start_ms, missing.end_ms, GapReason.AWAITING_ARCHIVE)])
+
+    def test_successful_request_without_data_after_due_is_source_gap(self) -> None:
+        missing = TimeRange(D1_START, D1_START + 10 * MIN)  # 09-20 파일의 공개 예상 시점(09-23 00:00)이 지났다
+        attempts = [Attempt(Dataset.KLINE_1M, (ALL_FIELDS,), TimeRange(D1_START, NOW - NOW % MIN), ok=True)]
         result = classify_missing(Dataset.KLINE_1M, SYMBOL, ALL_FIELDS, missing, ctx(attempts=attempts))
         self.assertEqual(reasons(result), [(missing.start_ms, missing.end_ms, GapReason.SOURCE_GAP)])
 

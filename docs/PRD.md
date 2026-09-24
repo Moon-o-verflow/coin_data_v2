@@ -2,7 +2,7 @@
 
 | 항목 | 내용 |
 |---|---|
-| 문서 버전 | 1.8 |
+| 문서 버전 | 1.9 |
 | 작성일 | 2026-09-24 |
 | 대상 시스템 | 바이낸스 USD-M 무기한 선물 ETH/USDT 판단 재료 생성기 |
 | 선행 버전 | coinDataMinning v2.1.3 |
@@ -20,6 +20,7 @@
 | 1.6 | 2단계 결정: 신선도를 실행 시각 기준으로 판정(FR-4.3), 요약 파일명·상태 비교 항목·`unavailable`·표기 규칙(FR-4.1~4.5), 경로 의존 계산의 고정 시작점(A.1.8), `compute`·`report` 설정 |
 | 1.7 | 부록 A v1.1: 돌파 대상을 유형별 최신 확정 스윙 하나로 한정(A.3.4), shock 시작의 효율성 변화 이벤트 중복 제거, 레벨 스윙 출처·정규화 TF 설정화, 5m·평활 TF 이벤트의 `tf`·`bars_ago` 기준 명시 |
 | 1.8 | 과거 시점 요약 `summary --at`(FR-4.8), `summary_log.trigger`에 `historical` 추가(스키마 버전 2), 요약 출력 단위 보완(FR-4.1) |
+| 1.9 | 부록 A v1.2: `quadrant_change`를 확정 4분면 사이의 변화로 한정(A.8.3). 결손 분류 `awaiting_archive` 추가(12.2, 스키마 버전 3). 캔들 비율·ATR 배수의 null 사유 표기(FR-4.2) |
 
 ---
 
@@ -562,7 +563,7 @@ SQLite 단일 파일을 사용한다.
 
 ### 10.3 계산 (compute)
 
-각 지표·이벤트의 정확한 정의(공식, 초기값, 동점 처리, 기본값)는 부록 A(v1.1, 확정)를 따른다. 부록 A와 이 절이 다르면 부록 A가 우선한다.
+각 지표·이벤트의 정확한 정의(공식, 초기값, 동점 처리, 기본값)는 부록 A(v1.2, 확정)를 따른다. 부록 A와 이 절이 다르면 부록 A가 우선한다.
 
 **FR-3.0 결손 표시**
 결손은 불리언이 아니라 비율로 표기한다. 지표값마다 계산 창 안의 결손 비율(누락 1분봉 수 / 기대 1분봉 수)을 함께 산출한다. 봉 단위가 아니라 분 단위로 센다(A.1.3). 이전 값을 이어받는 지표(Wilder 평활 등)도 계산 창 길이를 기준으로 판정하여, 결손 표시가 창 밖으로 영구히 이어지지 않게 한다.
@@ -640,6 +641,7 @@ ATR 기반 ZigZag로 스윙 고점·저점을 식별한다. 반전 임계값은 
 - 마크 가격은 사용하지 않는다.
 
 **표기 규칙**
+- 캔들 항목은 null 사유를 둘로 나눠 싣는다. `ratio_null_reason`(범위 0이면 `zero_denominator`)과 `atr_null_reason`(직전 봉 ATR이 없으면 그 사유, 0이면 `zero_denominator`). 부재 봉은 `null_reason = absent_bar`다.
 - 값이 매우 작은 원값은 단위를 바꿔 싣는다. Parkinson 변동성은 `parkinson_bp`(σ × 10000), 4분면의 `dOI`·`dPx`는 `d_oi_percent`·`d_px_percent`(× 100)다. 비율 자릿수(기본 3자리)로 반올림하면 원값의 유효 숫자가 사라지기 때문이다.
 - 요약 JSON 안의 시각은 UTC 문자열(`YYYY-MM-DDTHH:MMZ`)로 쓴다. 경과는 `bars_ago` 등 정수 필드로 따로 준다.
 - 숫자는 직렬화할 때만 반올림한다(A.1.5). 자릿수는 설정값이다(기본: 가격 2자리, ATR 배수·비율 3자리, bp 2자리, 백분위 1자리).
@@ -793,8 +795,9 @@ ATR 기반 ZigZag로 스윙 고점·저점을 식별한다. 반전 임계값은 
 | `retention_expired` | 아카이브에 없고 REST 보관 기간도 지나 취득 불가 | `gaps` |
 | `archive_missing` | 공개 예상 시점(설정값, 기본 2일)이 지났는데 아카이브 파일이 없음 | `gaps` |
 | `checksum_failed` | 아카이브 파일의 체크섬 검증이 재시도 후에도 실패 | `gaps` |
-| `source_gap` | 적재된 아카이브 파일 또는 REST 응답 안에서 행이나 값이 비어 있음 | `gaps` |
+| `source_gap` | 적재된 아카이브 파일 안에서, 또는 아카이브 공개 예상 시점이 지난 구간의 REST 응답 안에서 행이나 값이 비어 있음 | `gaps` |
 | `rest_failed` | 요청 실패 | `gaps` |
+| `awaiting_archive` | REST 요청은 성공했으나 값이 없고, 그 날의 아카이브 공개 예상 시점이 지나지 않음. 아카이브가 적재된 뒤에도 비어 있으면 `source_gap`으로 바뀌고, 채워지면 해소된다 | `gaps` |
 | `not_implemented` | 이번 버전 범위 밖 | `unavailable` |
 | `source_unavailable` | 취득 경로가 존재하지 않음 (청산) | `unavailable` |
 
@@ -906,7 +909,7 @@ taker 비율의 시각 의미는 아카이브 1분봉의 taker 매수량으로 �
 
 ---
 
-## 부록 A. 계산 정의와 이벤트 목록 (v1.1, 확정)
+## 부록 A. 계산 정의와 이벤트 목록 (v1.2, 확정)
 
 **확정의 의미**: 정의(공식, 처리 순서, 경계 조건, 출력 형식)가 확정되었다는 뜻이다. 파라미터 값이 검증되었다는 뜻이 아니다. 각 항목의 `미검증` 표기는 그대로 유지되며, 값은 검증 단계에서 설정 파일로 조정한다. 정의를 바꾸려면 이 부록의 버전을 올린다.
 
@@ -1302,7 +1305,7 @@ TF별로 최근 `R_tf`개 마감 봉 안에서 발생한 이벤트만 보고한�
 | `level_wick_into_zone` | level | 레벨 이벤트 TF | 봉의 high 또는 low가 zone에 들어갔으나, `C_{t−1}`과 `C_t`가 모두 zone 밖 같은 쪽 | `level_center`, `penetration_atr`, `source_count` |
 | `level_close_into_zone` | level | 레벨 이벤트 TF | `C_{t−1}`이 zone 밖, `C_t`가 zone 안 | `level_center`, `source_count` |
 | `level_close_through_zone` | level | 레벨 이벤트 TF | `C_{t−1}`과 `C_t`가 zone의 서로 반대편 밖 | `level_center`, `close_beyond_atr`, `source_count` |
-| `quadrant_change` | derivatives | 5m 기준 | 기간 P의 `quadrant`가 직전 metrics 시각과 다름 (둘 다 `null`이 아닐 때) | `period`, `from`, `to`, `d_oi`, `d_px` |
+| `quadrant_change` | derivatives | 5m 기준 | 기간 P의 확정 4분면(`indeterminate`·`null`이 아닌 값)이 직전 확정 4분면과 다름. `indeterminate`와 `null`은 건너뛰며 변화의 양 끝점으로 쓰지 않는다 | `period`, `from`, `to`, `d_oi`, `d_px` |
 | `premium_extreme` | derivatives | 평활 TF (15m) | 직전 평활 봉에서는 극단 구간이 아니었고, 이번 평활 봉에서 극단 구간 (백분위 ≥ `p_high` 또는 ≤ `p_low`) | `side`(`high`/`low`), `value_bp`(평활값), `pct` |
 
 - 레벨 이벤트 TF: 설정값 `events.level.timeframes` (기본 `15m`). 레벨 이벤트의 zone 판정도 양끝 포함 폐구간이다.
@@ -1314,6 +1317,7 @@ TF별로 최근 `R_tf`개 마감 봉 안에서 발생한 이벤트만 보고한�
   - 허용하는 잔여 미래 참조: 정규화에 쓰는 ATR_1h는 기준 시각 값이다. 척도에만 영향을 주므로 허용한다. `vwap_24h`는 현재 봉의 거래량을 포함한다.
 - `penetration_atr`: zone 가장자리부터 봉의 극값까지 zone 안쪽으로 들어간 거리 / 기준 시각의 ATR_1h.
 - 레벨 이벤트의 `close_beyond_atr`: zone 가장자리부터 `C_t`까지의 거리 / 기준 시각의 ATR_1h.
+- `quadrant_change`의 직전 확정 4분면은 보고 기간 시작 전 `report_minutes` 안에서 찾는다. 그 안에 확정 4분면이 없으면 보고 기간의 첫 확정 4분면은 이벤트를 만들지 않는다(`from`을 정할 수 없다). 불감대 경계 근처에서 5분마다 `indeterminate`로 드나드는 흔들림이 이벤트 수로 불어나 근거의 수로 오인되는 것을 막기 위함이다. 현재 4분면이 `indeterminate`라는 사실은 `derivatives`와 `state`에 남는다.
 - 거래량 이벤트 TF: 설정값 `events.volume_spike.timeframes` (기본 `15m`, `30m`, `1h`).
 - `volume_spike` 기본값: `N = 20`, `v_th = 2.0`.
 - `premium_extreme` 기본값: `p_high = 95`, `p_low = 5`. 보고 기간은 평활 TF의 보고 기간(`15m = 16`)을 따른다.
@@ -1418,6 +1422,9 @@ TF별로 최근 `R_tf`개 마감 봉 안에서 발생한 이벤트만 보고한�
 ---
 
 ### A.11 본문 반영 내역
+
+PRD v1.9 (부록 A v1.2):
+- **A.8.3**: `quadrant_change`를 확정 4분면 사이의 변화로 한정. `indeterminate`·`null`을 건너뛴다.
 
 PRD v1.7 (부록 A v1.1):
 - **A.3.4**: 돌파 대상을 유형별 가장 최근 확정 스윙 하나로 한정. 돌파되면 대상 없음, 새 스윙 확정 시 교체. **FR-3.4** 문구 수정.

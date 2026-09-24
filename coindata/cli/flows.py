@@ -30,6 +30,7 @@ from coindata.models import (
     ArchiveFileStatus,
     ArchiveOutcome,
     Dataset,
+    GapReason,
     Row,
     TimeRange,
 )
@@ -286,7 +287,10 @@ class IngestFlow:
                     report.gaps_new += len(stats.inserted)
                     report.gaps_resolved += stats.resolved
                     for gap in stats.inserted:
-                        logger.warning(
+                        # 아카이브 공개 전의 빈칸은 대개 다음 적재에서 채워지므로 경고하지 않는다.
+                        level = logging.INFO if gap.reason is GapReason.AWAITING_ARCHIVE else logging.WARNING
+                        logger.log(
+                            level,
                             "gap detected: %s %s %s ~ %s (%s)",
                             dataset.value, name, format_ms(gap.range.start_ms), format_ms(gap.range.end_ms), gap.reason.value,
                         )

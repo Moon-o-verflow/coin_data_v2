@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import math
 import unittest
+from unittest import mock
 
 from coindata.compute import derivatives as deriv
+from coindata.compute import engine
 from coindata.compute import events as ev
 from coindata.compute.engine import ComputeInput, analyze
 from coindata.compute.indicators import atr, candle, efficiency_ratio, parkinson, percentile_rank, rolling_percentile
@@ -334,6 +336,34 @@ class DerivativesTest(unittest.TestCase):
         self.assertEqual(r.smoothed[1].pct, 25.0)
 
 
+class QuadrantChangeTest(unittest.TestCase):
+    """A.8.3: 확정 4분면 사이의 변화만. indeterminate·null은 건너뛴다."""
+
+    def test_skips_indeterminate_and_null(self) -> None:
+        step = 5 * MINUTE_MS
+        report = 12 * step
+        ref = 1000 * step
+        first = ref - 2 * report + step
+        # 보고 기간 앞: A. 보고 기간: A, 미정, A, null, 미정, B, 미정, B, A
+        script = {first + i * step: "oi_up_price_up" for i in range(12)}
+        seq = ["oi_up_price_up", "indeterminate", "oi_up_price_up", None, "indeterminate",
+               "oi_down_price_down", "indeterminate", "oi_down_price_down", "oi_up_price_up"]
+        start = ref - report + step
+        script.update({start + i * step: q for i, q in enumerate(seq)})
+        latest = start + (len(seq) - 1) * step
+
+        def fake(ts, period, period_ms, *args):
+            return deriv.QuadrantPoint(ts, period, 0.01, 0.01, script.get(ts), None)
+
+        with mock.patch.object(engine.deriv, "quadrant_at", side_effect=fake):
+            got = engine._quadrant_changes("1h", 60 * MINUTE_MS, {}, {}, 0.001, 0.001, ref, latest, report)
+        self.assertEqual(
+            [(e.bar_time, e.measures.from_, e.measures.to) for e in got],
+            [(start + 5 * step, "oi_up_price_up", "oi_down_price_down"), (start + 8 * step, "oi_down_price_down", "oi_up_price_up")],
+        )
+        self.assertEqual([e.bars_ago for e in got], [3, 0])
+
+
 class LevelsTest(unittest.TestCase):
     def test_window_stats(self) -> None:
         ks = [kline(m * MINUTE_MS, 10, 10 + m % 3, 9 - m % 2, 10, v=2.0) for m in range(10) if m != 6]
@@ -412,6 +442,10 @@ class EngineBoundaryTest(unittest.TestCase):
         self.assertEqual(tf15.er.null_reason, ZERO_DENOMINATOR)
         self.assertEqual(tf15.zigzag.swings, ())
         self.assertEqual(a.levels.reported, ())  # 1h ATR 0 → 레벨 없음
+        row = tf15.candles[-1]
+        self.assertEqual((row.ratio_null_reason, row.atr_null_reason), (ZERO_DENOMINATOR, ZERO_DENOMINATOR))
+        daily = a.timeframes[3].candles[0]
+        self.assertEqual(daily.atr_null_reason, INSUFFICIENT_HISTORY)
 
     def test_with_gaps_and_derivatives(self) -> None:
         ks = []

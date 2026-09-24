@@ -19,6 +19,7 @@ from coindata.models import MINUTE_MS, PremiumKline
 
 BP = 10_000
 SOURCE_GAP = "source_gap"
+INDETERMINATE = "indeterminate"
 
 # ---------------------------------------------------------------------------
 # 4분면 (A.5.1)
@@ -61,7 +62,7 @@ def quadrant_at(
         missing = None in (oi_now, oi_before, px_now, px_before)
         return QuadrantPoint(ts, period, d_oi, d_px, None, SOURCE_GAP if missing else ZERO_DENOMINATOR)
     if abs(d_oi) < oi_band or abs(d_px) < px_band:
-        quadrant = "indeterminate"
+        quadrant = INDETERMINATE
     else:
         quadrant = f"oi_{'up' if d_oi > 0 else 'down'}_price_{'up' if d_px > 0 else 'down'}"
     return QuadrantPoint(ts, period, d_oi, d_px, quadrant, None)

@@ -10,7 +10,7 @@ import sqlite3
 from coindata.models import ArchiveFileStatus, Dataset, GapReason, RunMode, RunStatus, SummaryTrigger
 from coindata.store.db import StoreError, transaction
 
-SCHEMA_VERSION = 2  # 2: summary_log.trigger에 historical 추가
+SCHEMA_VERSION = 3  # 2: summary_log.trigger에 historical 추가, 3: data_gap.reason에 awaiting_archive 추가
 
 
 def _values(enum_type: type) -> str:
@@ -126,20 +126,19 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version > SCHEMA_VERSION:
         raise StoreError(f"저장소 스키마 버전({version})이 이 프로그램({SCHEMA_VERSION})보다 새롭다")
+    # CHECK 제약을 바꾸려면 테이블을 다시 만들어야 한다. 기존 테이블을 옮겨 두고 새로 만든 뒤 행을 복사한다.
+    rebuild = [table for since, table in _REBUILT_AT if 0 < version < since]
     with transaction(conn):
-        if version == 1:
-            _migrate_v1_summary_log(conn)
+        for table in rebuild:
+            conn.execute(f"DROP INDEX IF EXISTS ux_{table}_open")
+            conn.execute(f"ALTER TABLE {table} RENAME TO {table}_old")
         for ddl in _DDL:
             conn.execute(ddl)
-        if version == 1:
-            conn.execute(
-                'INSERT INTO summary_log SELECT summary_id, created_at, "trigger", ref_time, ref_price, params_hash, '
-                "state, file_path FROM summary_log_v1"
-            )
-            conn.execute("DROP TABLE summary_log_v1")
+        for table in rebuild:
+            conn.execute(f"INSERT INTO {table} SELECT * FROM {table}_old")
+            conn.execute(f"DROP TABLE {table}_old")
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
-def _migrate_v1_summary_log(conn: sqlite3.Connection) -> None:
-    """버전 1의 summary_log는 trigger 제약이 'manual'뿐이다. 제약을 바꾸려면 테이블을 다시 만들어야 한다."""
-    conn.execute("ALTER TABLE summary_log RENAME TO summary_log_v1")
+# (이 버전부터 제약이 바뀐 테이블). 그보다 낮은 버전의 저장소는 이 테이블을 다시 만든다.
+_REBUILT_AT: tuple[tuple[int, str], ...] = ((2, "summary_log"), (3, "data_gap"))
