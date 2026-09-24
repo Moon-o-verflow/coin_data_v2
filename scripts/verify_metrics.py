@@ -5,10 +5,10 @@
     python scripts/verify_metrics.py mapping [--day 2026-09-20]
     python scripts/verify_metrics.py all
 
-timestamp: metrics의 create_time이 가리키는 순간을 확인한다. 미결제약정 명목가치 / 계약 수로 얻은
-    암시 가격을 1분봉 종가와 비교해, 어느 분의 가격과 가장 가까운지 본다. 아카이브만 쓴다.
-mapping: 아카이브 컬럼과 REST 필드의 대응(PRD 8.4 매핑표)을 확인한다. 같은 날의 아카이브와 REST 값을
-    모든 조합으로 비교하고, 시각을 ±10분 밀어 보며 시각 정렬도 확인한다. REST 보관 기간(30일) 안의 날짜가 필요하다.
+timestamp: 저장되는 metrics `ts`(구간 끝 시각, PRD 15.7)가 맞는지 확인한다. 미결제약정 명목가치 / 계약 수로
+    얻은 암시 가격을 1분봉 종가와 비교해, `ts`에 끝나는 1분봉(k=0)과 가장 가까우면 정상이다. 아카이브만 쓴다.
+mapping: 아카이브 컬럼과 REST 필드의 대응(PRD 8.4 매핑표)과 시각 보정을 확인한다. 보정 후에는 모든 필드가
+    시각 차이 0분에서 맞아야 한다. REST 보관 기간(30일) 안의 날짜가 필요하다.
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ def check_timestamp(archive: ArchiveClient, symbol: str, days: Sequence[date]) -
             if row.sum_open_interest and row.sum_open_interest_value:
                 implied[row.ts] = row.sum_open_interest_value / row.sum_open_interest
     print(f"[timestamp] {days[0]} ~ {days[-1]}, metrics {len(implied)}행")
-    print("  오프셋 k: create_time + k분에 끝나는 1분봉 종가와 암시 가격의 상대 오차")
+    print("  오프셋 k: ts + k분에 끝나는 1분봉 종가와 암시 가격의 상대 오차")
     results = []
     for k in OFFSETS:
         errors = [
@@ -65,13 +65,11 @@ def check_timestamp(archive: ArchiveClient, symbol: str, days: Sequence[date]) -
             results.append((statistics.median(errors), k, statistics.mean(errors), len(errors)))
             print(f"  k={k:+3d}  중앙값 {statistics.median(errors) * 1e4:8.3f} bp  평균 {statistics.mean(errors) * 1e4:8.3f} bp  (n={len(errors)})")
     best = min(results)
-    print(f"  결론: create_time + {best[1]:+d}분에 끝나는 1분봉 종가와 가장 가깝다.")
+    print(f"  결론: ts + {best[1]:+d}분에 끝나는 1분봉 종가와 가장 가깝다.")
     if best[1] == 0:
-        print("  → 이 기간의 create_time은 스냅샷 시각이다.")
-    elif best[1] == 5:
-        print("  → 이 기간의 create_time은 5분 구간의 시작이고, 값은 구간 끝(+5분) 시점의 스냅샷이다.")
+        print("  → 정상: 저장된 ts는 스냅샷 시각(구간 끝)이다.")
     else:
-        print("  → 예상하지 못한 정렬이다. PRD 15.7에 기록하고 검토한다.")
+        print("  → 시각 보정이 맞지 않는다. PRD 15.7에 기록하고 검토한다.")
 
 
 def check_mapping(archive: ArchiveClient, rest: BinanceRestClient, symbol: str, day: date) -> None:
@@ -93,7 +91,7 @@ def check_mapping(archive: ArchiveClient, rest: BinanceRestClient, symbol: str, 
             alignment.append((rate, -abs(k), k))
             print(f"  k={k:+3d}  {rate * 100:6.2f}% (n={n})")
     best_offset = max(alignment)[2] if alignment else 0
-    print(f"  결론: 가장 잘 맞는 시각 차이 {best_offset:+d}분")
+    print(f"  결론: 가장 잘 맞는 시각 차이 {best_offset:+d}분" + (" (정상)" if best_offset == 0 else " (시각 보정 확인 필요)"))
 
     print("  필드 대응: 아카이브 컬럼(행) × REST 필드(열) 일치율")
     print("  " + " " * 26 + "".join(f"{name[:12]:>13}" for name in METRICS_FIELDS))

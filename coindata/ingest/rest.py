@@ -43,6 +43,8 @@ class RestSchemaError(Exception):
 class MetricsEndpoint:
     path: str
     fields: tuple[tuple[str, str], ...]  # (응답 필드명, metrics_5m 컬럼)
+    # 응답 timestamp를 구간 끝 시각(metrics_5m.ts)으로 바꾸는 이동량. taker 비율만 구간 시작을 적는다(PRD 15.7).
+    timestamp_offset_ms: int = 0
 
 
 # PRD 8.4 매핑표. 응답 필드명은 PRD 15.6에 따라 공식 문서로 확인해야 한다.
@@ -54,7 +56,11 @@ METRICS_ENDPOINTS: tuple[MetricsEndpoint, ...] = (
     MetricsEndpoint("/futures/data/topLongShortPositionRatio", (("longShortRatio", "top_position_ratio"),)),
     MetricsEndpoint("/futures/data/topLongShortAccountRatio", (("longShortRatio", "top_account_ratio"),)),
     MetricsEndpoint("/futures/data/globalLongShortAccountRatio", (("longShortRatio", "global_account_ratio"),)),
-    MetricsEndpoint("/futures/data/takerlongshortRatio", (("buySellRatio", "taker_buy_sell_ratio"),)),
+    MetricsEndpoint(
+        "/futures/data/takerlongshortRatio",
+        (("buySellRatio", "taker_buy_sell_ratio"),),
+        timestamp_offset_ms=Dataset.METRICS_5M.interval_ms,
+    ),
 )
 
 _BAR_PATHS = {
@@ -67,12 +73,12 @@ def metrics_rest_range(window: TimeRange, server_time_ms: int) -> TimeRange | No
     """`window` 중 REST로 요청할 수 있는 metrics 구간.
 
     - 보관 기간(최근 30일) 안쪽으로 여유를 두고 자른다.
-    - 5분 구간이 끝난(`ts + 5분 <= 서버 시각`) 시각까지만 요청한다.
+    - `ts`는 5분 구간의 끝 시각이므로, 끝난 구간(`ts <= 서버 시각`)까지만 요청한다.
     """
     interval = Dataset.METRICS_5M.interval_ms
     oldest = server_time_ms - API_LIMITS.futures_data_retention_ms + API_LIMITS.futures_data_retention_margin_ms
     start = max(window.start_ms, -(-oldest // interval) * interval)
-    end = min(window.end_ms, (server_time_ms - interval) // interval * interval)
+    end = min(window.end_ms, server_time_ms // interval * interval)
     return TimeRange(start, end) if start <= end else None
 
 
@@ -153,8 +159,9 @@ class BinanceRestClient:
             start = requested.start_ms
             while start <= requested.end_ms:
                 end = min(start + page_span, requested.end_ms)
+                offset = endpoint.timestamp_offset_ms
                 params = {
-                    "symbol": symbol, "period": "5m", "startTime": start, "endTime": end,
+                    "symbol": symbol, "period": "5m", "startTime": start - offset, "endTime": end - offset,
                     "limit": API_LIMITS.futures_data_page_limit,
                 }
                 try:
@@ -164,7 +171,8 @@ class BinanceRestClient:
                     columns = tuple(column for _, column in endpoint.fields)
                     failures.append(FetchFailure(TimeRange(start, requested.end_ms), columns, str(exc)))
                     break
-                for ts, point in points:
+                for raw_ts, point in points:
+                    ts = raw_ts + offset
                     if start <= ts <= end and ts % interval == 0:
                         values.setdefault(ts, {}).update(point)
                 start = end + interval

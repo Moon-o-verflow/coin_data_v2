@@ -81,8 +81,8 @@ class MetricsTest(unittest.TestCase):
         expected = metrics_values(row.ts)
         for name in METRICS_FIELDS:
             self.assertEqual(getattr(row, name), expected[name], name)
-        # 5분 구간이 끝난 시각까지만: 01:53:20 기준 마지막은 01:45
-        self.assertEqual(result.rows[-1].ts, ms("2026-09-24 01:45:00"))
+        # ts는 구간 끝 시각이라 01:53:20 기준 마지막은 01:50에 끝난 구간이다
+        self.assertEqual(result.rows[-1].ts, ms("2026-09-24 01:50:00"))
 
     def test_one_endpoint_failure_keeps_other_fields(self) -> None:
         self.server.failing_paths.add("/futures/data/takerlongshortRatio")

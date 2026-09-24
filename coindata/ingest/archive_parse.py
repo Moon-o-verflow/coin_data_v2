@@ -17,8 +17,8 @@ from collections.abc import Sequence
 from datetime import date
 
 from coindata.config import API_LIMITS
-from coindata.ingest.timeutil import day_start_ms, parse_utc_text_to_ms
-from coindata.models import DAY_MS, MINUTE_MS, Dataset, Kline, MetricsRow, PremiumKline, Row
+from coindata.ingest.timeutil import day_start_ms, ms_to_day, parse_utc_text_to_ms
+from coindata.models import DAY_MS, MINUTE_MS, Dataset, Kline, MetricsRow, PremiumKline, Row, TimeRange
 
 
 class ArchiveParseError(Exception):
@@ -44,6 +44,27 @@ METRICS_COLUMN_MAP: dict[str, str] = {
     "count_long_short_ratio": "global_account_ratio",
     "sum_taker_long_short_vol_ratio": "taker_buy_sell_ratio",
 }
+
+
+def metrics_label_shift_ms(day: date) -> int:
+    """아카이브 metrics의 `create_time`을 구간 끝 시각으로 바꾸는 이동량(PRD 8.4, 15.7).
+
+    `metrics_5m.ts`는 5분 구간의 끝 시각이다. 2024-03-04 이후 파일은 `create_time`이 구간 시작이므로 5분을 더한다.
+    """
+    return Dataset.METRICS_5M.interval_ms if day >= API_LIMITS.metrics_start_label_since else 0
+
+
+def archive_day_range(dataset: Dataset, day: date) -> TimeRange:
+    """그 날짜의 아카이브 파일이 담는 `ts` 범위(양끝 포함)."""
+    start = day_start_ms(day) + (metrics_label_shift_ms(day) if dataset is Dataset.METRICS_5M else 0)
+    return TimeRange(start, start + DAY_MS - dataset.interval_ms)
+
+
+def archive_day_of(dataset: Dataset, ts: int) -> date:
+    """`ts`의 행이 들어 있는 아카이브 파일의 날짜."""
+    day = ms_to_day(ts)
+    span = archive_day_range(dataset, day)
+    return day if span.start_ms <= ts <= span.end_ms else ms_to_day(ts - DAY_MS)
 
 
 def parse_archive_csv(dataset: Dataset, symbol: str, day: date, text: str) -> list[Row]:
@@ -108,6 +129,7 @@ def _parse_metrics(records: list[list[str]], symbol: str, day: date) -> list[Row
     index, body = _column_index(records, "create_time", METRICS_COLUMNS)
     day_start = day_start_ms(day)
     interval = Dataset.METRICS_5M.interval_ms
+    shift = metrics_label_shift_ms(day)
     rows: list[Row] = []
     for line_no, record in enumerate(body, start=1):
         if len(record) < len(METRICS_COLUMNS):
@@ -117,6 +139,7 @@ def _parse_metrics(records: list[list[str]], symbol: str, day: date) -> list[Row
         except ValueError as exc:
             raise ArchiveParseError(f"metrics {day} 행 {line_no}: create_time 형식 오류: {exc}") from exc
         _check_in_day(ts, day_start, interval, Dataset.METRICS_5M, day, line_no)
+        ts += shift
         if record[index["symbol"]].strip() != symbol:
             raise ArchiveParseError(f"metrics {day} 행 {line_no}: 종목이 {symbol}이 아니다")
         values = {

@@ -19,10 +19,10 @@ from datetime import date, timedelta
 from coindata.cli.gapreason import Attempt, ClassifyContext, align_range, classify_missing
 from coindata.config import Config
 from coindata.ingest.archive import ArchiveClient
-from coindata.ingest.archive_parse import ArchiveParseError
+from coindata.ingest.archive_parse import ArchiveParseError, archive_day_of, archive_day_range
 from coindata.ingest.http import Clock, RequestFailedError
 from coindata.ingest.rest import BinanceRestClient, RestSchemaError, metrics_rest_range
-from coindata.ingest.timeutil import day_start_ms, format_ms, ms_to_day
+from coindata.ingest.timeutil import format_ms, ms_to_day
 from coindata.models import (
     ALL_FIELDS,
     DAY_MS,
@@ -160,7 +160,8 @@ class IngestFlow:
             except (RequestFailedError, ArchiveParseError) as exc:
                 report.archive_errors += 1
                 self._fail(f"{dataset.value} {day} 아카이브: {exc}")
-                self._record(dataset, (ALL_FIELDS,), day_start_ms(day), day_start_ms(day) + DAY_MS - 1, ok=False)
+                span = archive_day_range(dataset, day)
+                self._record(dataset, (ALL_FIELDS,), span.start_ms, span.end_ms, ok=False)
                 self._progress(f"{prefix} 실패: {exc}")
                 continue
             report.rows_changed += writer.store_archive_day(self._conn, result, attempted_at, self._clock.now_ms())
@@ -269,7 +270,7 @@ class IngestFlow:
             window = self._detection_window(dataset)
             if window is not None:
                 statuses = query.archive_statuses(
-                    self._conn, dataset, self.symbol, ms_to_day(window.start_ms), ms_to_day(window.end_ms)
+                    self._conn, dataset, self.symbol, archive_day_of(dataset, window.start_ms), archive_day_of(dataset, window.end_ms)
                 )
                 context = ClassifyContext(now, self._config.data.archive_publish_delay_days, statuses, self._attempts)
                 for name in self._gap_fields(dataset):
@@ -298,7 +299,6 @@ class IngestFlow:
         끝은 저장된 마지막 행, 실패한 요청의 끝, 미해소 결측의 끝 중 가장 늦은 시각이며 마지막 마감 시각을 넘지 않는다.
         요청이 성공했는데 아직 응답에 없는 최신 구간은 결측으로 보지 않는다.
         """
-        interval = dataset.interval_ms
         open_gaps = query.open_gaps(self._conn, self.symbol, dataset)
         starts = [g.range.start_ms for g in open_gaps]
         if dataset in self._run_start:
@@ -310,8 +310,7 @@ class IngestFlow:
             ends.append(bounds.end_ms)
         if not starts or not ends:
             return None
-        last_closed = (self.now_ms() - interval) // interval * interval
-        return align_range(dataset, min(starts), min(max(ends), last_closed))
+        return align_range(dataset, min(starts), min(max(ends), last_complete_ts(dataset, self.now_ms())))
 
     def _gap_fields(self, dataset: Dataset) -> tuple[str, ...]:
         return (ALL_FIELDS, *METRICS_FIELDS) if dataset is Dataset.METRICS_5M else (ALL_FIELDS,)
@@ -331,6 +330,14 @@ class IngestFlow:
         self.report.failures.append(message)
 
 
+def last_complete_ts(dataset: Dataset, now_ms: int) -> int:
+    """끝난 마지막 행의 시각. 봉은 `ts`가 시작 시각이라 한 간격 전 봉까지, metrics는 `ts`가 구간 끝 시각이라 현재 격자까지다."""
+    interval = dataset.interval_ms
+    if dataset is Dataset.METRICS_5M:
+        return now_ms // interval * interval
+    return (now_ms - interval) // interval * interval
+
+
 def _merge(spans: Sequence[TimeRange], interval: int) -> list[TimeRange]:
     merged: list[TimeRange] = []
     for span in sorted(spans, key=lambda s: s.start_ms):
@@ -348,10 +355,10 @@ def run_init(flow: IngestFlow, days: int) -> RunReport:
     first_day = today - timedelta(days=days)
     archive_days = date_range(first_day, today - timedelta(days=1))
     for dataset in Dataset:
-        flow.mark_start(dataset, day_start_ms(first_day))
+        flow.mark_start(dataset, archive_day_range(dataset, first_day).start_ms)
         flow.archive_phase(dataset, archive_days)
     for dataset in Dataset:
-        flow.rest_tail_phase(dataset, day_start_ms(first_day))
+        flow.rest_tail_phase(dataset, archive_day_range(dataset, first_day).start_ms)
     flow.refill_phase()
     flow.gap_phase()
     return flow.report
@@ -374,10 +381,10 @@ def run_sync(flow: IngestFlow, config: Config) -> RunReport:
             first_day = fallback_day
         else:
             first_day = max(ms_to_day(bounds.start_ms), min(ms_to_day(bounds.end_ms), refill_from))
-        flow.mark_start(dataset, day_start_ms(first_day))
+        flow.mark_start(dataset, archive_day_range(dataset, first_day).start_ms)
         flow.archive_phase(dataset, date_range(first_day, yesterday))
     for dataset in Dataset:
-        flow.rest_tail_phase(dataset, day_start_ms(fallback_day))
+        flow.rest_tail_phase(dataset, archive_day_range(dataset, fallback_day).start_ms)
     flow.refill_phase()
     flow.gap_phase()
     return flow.report

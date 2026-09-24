@@ -11,7 +11,7 @@ archive_publish_delay_days = 2    # 이 기간이 지나도 아카이브가 없�
 refill_window_days = 30           # sync가 빈칸을 다시 채우려 시도하는 최근 기간(일)
 
 [runtime]
-log_level = "INFO"
+log_level = "WARNING"            # 요청마다 기록을 보려면 "INFO"
 archive_base_url = "https://data.binance.vision/data"
 rest_base_url = "https://fapi.binance.com"
 http_timeout_seconds = 30.0

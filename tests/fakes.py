@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 
+from coindata.ingest.archive_parse import archive_day_range, metrics_label_shift_ms
 from coindata.ingest.http import HttpResponse, TransportError
 from coindata.ingest.timeutil import day_start_ms
 from coindata.models import DAY_MS, MINUTE_MS, Dataset
@@ -116,14 +117,16 @@ def premium_csv(day: date) -> str:
 
 
 def metrics_csv(day: date, empty_taker: bool = False, skip: Iterable[int] = (), shuffle: bool = True) -> str:
+    """`skip`과 값의 키는 구간 끝 시각(metrics_5m.ts)이다. 2024-03-04 이후 파일처럼 create_time은 구간 시작을 적는다."""
     skipped = set(skip)
-    start = day_start_ms(day)
+    span = archive_day_range(Dataset.METRICS_5M, day)
     rows = []
-    for ts in range(start, start + DAY_MS, METRICS_MS):
+    for ts in range(span.start_ms, span.end_ms + 1, METRICS_MS):
         if ts in skipped:
             continue
         v = metrics_values(ts)
-        stamp = datetime.fromtimestamp(ts / 1000, UTC).strftime("%Y-%m-%d %H:%M:%S")
+        label = ts - metrics_label_shift_ms(day)
+        stamp = datetime.fromtimestamp(label // 1000, UTC).strftime("%Y-%m-%d %H:%M:%S")
         taker = "" if empty_taker else f"{v['taker_buy_sell_ratio']}"
         rows.append(
             f"{stamp},{SYMBOL},{v['sum_open_interest']},{v['sum_open_interest_value']},{v['top_account_ratio']},"
@@ -231,11 +234,14 @@ class FakeBinance:
         return items
 
     def _metrics(self, path: str, params: dict[str, str]) -> list[dict[str, object]]:
+        # 실제 REST처럼 taker 비율만 timestamp에 구간 시작을, 나머지는 구간 끝(스냅샷 시각)을 적는다.
+        label_shift = METRICS_MS if path.endswith("takerlongshortRatio") else 0
         start = -(-int(params["startTime"]) // METRICS_MS) * METRICS_MS
-        end = min(int(params["endTime"]), self.clock.now - METRICS_MS)
+        end = min(int(params["endTime"]), self.clock.now // METRICS_MS * METRICS_MS - label_shift)
         oldest = self.clock.now - 30 * DAY_MS
         items: list[dict[str, object]] = []
-        for ts in range(start, end + 1, METRICS_MS):
+        for label in range(start, end + 1, METRICS_MS):
+            ts = label + label_shift  # 구간 끝 시각
             if ts < oldest or (path, ts) in self.rest_missing:
                 continue
             v = metrics_values(ts)
@@ -253,7 +259,7 @@ class FakeBinance:
                 item = {"symbol": SYMBOL, "longShortRatio": str(v["global_account_ratio"]), "longAccount": "0.7", "shortAccount": "0.3"}
             else:
                 item = {"buySellRatio": str(v["taker_buy_sell_ratio"]), "buyVol": "1", "sellVol": "1"}
-            item["timestamp"] = ts
+            item["timestamp"] = label
             items.append(item)
         return items
 

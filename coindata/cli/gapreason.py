@@ -17,10 +17,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 from coindata.config import API_LIMITS
-from coindata.ingest.timeutil import day_start_ms, ms_to_day
+from coindata.ingest.archive_parse import archive_day_of, archive_day_range
+from coindata.ingest.timeutil import day_start_ms
 from coindata.models import (
     ALL_FIELDS,
     DAY_MS,
@@ -63,7 +64,9 @@ def classify_missing(
 ) -> list[GapRange]:
     interval = dataset.interval_ms
     relevant = [a for a in ctx.attempts if a.dataset is dataset and _covers_field(a, field)]
-    cuts = {day_start_ms(ms_to_day(missing.start_ms)) + DAY_MS * i for i in range(1, _days_spanned(missing) + 1)}
+    first_day = archive_day_of(dataset, missing.start_ms)
+    days = archive_day_of(dataset, missing.end_ms).toordinal() - first_day.toordinal()
+    cuts = {archive_day_range(dataset, first_day + timedelta(days=i)).start_ms for i in range(1, days + 1)}
     for attempt in relevant:
         cuts.add(attempt.range.start_ms)
         cuts.add(attempt.range.end_ms + interval)
@@ -85,10 +88,6 @@ def classify_missing(
     return result
 
 
-def _days_spanned(span: TimeRange) -> int:
-    return ms_to_day(span.end_ms).toordinal() - ms_to_day(span.start_ms).toordinal()
-
-
 def _covers_field(attempt: Attempt, field: str) -> bool:
     return field == ALL_FIELDS or ALL_FIELDS in attempt.fields or field in attempt.fields
 
@@ -101,7 +100,7 @@ def _reason(dataset: Dataset, piece: TimeRange, attempts: Sequence[Attempt], ctx
     covering = [a for a in attempts if _contains(a.range, piece)]
     if any(not a.ok for a in covering):
         return GapReason.REST_FAILED
-    day = ms_to_day(piece.start_ms)
+    day = archive_day_of(dataset, piece.start_ms)
     status = ctx.archive_status.get(day)
     if status is ArchiveFileStatus.LOADED or covering:
         return GapReason.SOURCE_GAP

@@ -16,7 +16,7 @@ from coindata.cli import EXIT_CANNOT_RUN, EXIT_OK, EXIT_PARTIAL, Runtime, main
 from coindata.cli.lock import ProcessLock
 from coindata.ingest.timeutil import day_start_ms
 from coindata.models import MINUTE_MS, Dataset
-from tests.fakes import ARCHIVE_BASE, REST_BASE, FakeBinance, FakeClock, FakeSleeper, kline_csv, metrics_csv, ms
+from tests.fakes import ARCHIVE_BASE, METRICS_MS, REST_BASE, FakeBinance, FakeClock, FakeSleeper, kline_csv, metrics_csv, ms
 
 NOW = ms("2026-09-24 01:53:20")  # 오늘 09-24, 어제(09-23) 아카이브는 아직 미공개
 D21, D22, D23 = date(2026, 9, 21), date(2026, 9, 22), date(2026, 9, 23)
@@ -78,7 +78,8 @@ class InitTest(CliTestCase):
             count, first, last = self.query(f"SELECT COUNT(*), MIN(open_time), MAX(open_time) FROM {table}")[0]
             self.assertEqual((first, last), (day_start_ms(D21), last_closed), table)
             self.assertEqual(count, (last_closed - day_start_ms(D21)) // MINUTE_MS + 1, table)
-        self.assertEqual(self.query("SELECT MAX(ts) FROM metrics_5m")[0][0], ms("2026-09-24 01:45:00"))
+        # metrics_5m.ts는 5분 구간의 끝 시각이다. 01:53:20에는 01:50에 끝난 구간까지 있다
+        self.assertEqual(self.query("SELECT MIN(ts), MAX(ts) FROM metrics_5m")[0], (day_start_ms(D21) + METRICS_MS, ms("2026-09-24 01:50:00")))
         self.assertEqual(
             self.query("SELECT source, COUNT(*) FROM kline_1m GROUP BY source ORDER BY source"),
             [("archive", 2880), ("rest", 1440 + 113)],
@@ -96,7 +97,7 @@ class InitTest(CliTestCase):
 
     def test_metrics_archive_values_mapped(self) -> None:
         self.run_cli("init")
-        row = self.query(f"SELECT top_position_ratio, top_account_ratio, taker_buy_sell_ratio, source FROM metrics_5m WHERE ts = {day_start_ms(D21)}")
+        row = self.query(f"SELECT top_position_ratio, top_account_ratio, taker_buy_sell_ratio, source FROM metrics_5m WHERE ts = {day_start_ms(D21) + METRICS_MS}")
         self.assertEqual(row, [(1.5, 1.2, 0.9, "archive")])
 
     def test_resume_skips_loaded_files_and_is_idempotent(self) -> None:
@@ -117,7 +118,7 @@ class InitTest(CliTestCase):
         self.assertEqual({(g[0], g[1], g[2], g[4]) for g in gaps}, {
             ("kline_1m", "*", day_start_ms(D23), "rest_failed"),
             ("premium_index_1m", "*", day_start_ms(D23), "rest_failed"),
-            ("metrics_5m", "*", day_start_ms(D23), "rest_failed"),
+            ("metrics_5m", "*", day_start_ms(D23) + METRICS_MS, "rest_failed"),
         })
         self.assertEqual(self.query("SELECT status FROM ingest_run")[0][0], "partial")
 
@@ -165,7 +166,7 @@ class InitTest(CliTestCase):
         self.assertEqual(code, EXIT_PARTIAL)
         gaps = self.open_gaps()
         self.assertEqual(
-            gaps, [("metrics_5m", "taker_buy_sell_ratio", day_start_ms(D23), ms("2026-09-24 01:45:00"), "rest_failed")]
+            gaps, [("metrics_5m", "taker_buy_sell_ratio", day_start_ms(D23) + METRICS_MS, ms("2026-09-24 01:50:00"), "rest_failed")]
         )
         self.server.failing_paths.clear()
         code, _ = self.run_cli("sync")

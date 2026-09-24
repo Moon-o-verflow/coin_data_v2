@@ -80,7 +80,7 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(reasons(result), [(missing.start_ms, missing.end_ms, GapReason.ARCHIVE_MISSING)])
 
     def test_field_attempts_only_apply_to_their_field(self) -> None:
-        missing = TimeRange(D1_START, D1_START + 10 * MIN)
+        missing = TimeRange(D1_START + 5 * MIN, D1_START + 15 * MIN)  # metrics 20일 파일은 00:05부터 담는다
         attempts = [Attempt(Dataset.METRICS_5M, ("sum_open_interest",), TimeRange(D1_START, D1_START + DAY_MS - 5 * MIN), ok=False)]
         statuses = {D1: ArchiveFileStatus.LOADED}
         taker = classify_missing(Dataset.METRICS_5M, SYMBOL, "taker_buy_sell_ratio", missing, ctx(statuses, attempts))

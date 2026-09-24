@@ -11,6 +11,7 @@ import logging
 import tomllib
 import typing
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -45,6 +46,8 @@ class ApiLimits:
     # 시각이 밀리초 정수인지 확인하는 범위(2017-07-14 ~ 2100-01-01). 마이크로초로 바뀌면 이 범위를 벗어난다.
     timestamp_ms_min: int = 1_500_000_000_000
     timestamp_ms_max: int = 4_102_444_800_000
+    # 아카이브 metrics의 create_time이 이 날짜 파일부터 5분 구간의 끝이 아니라 시작을 가리킨다(PRD 8.4, 15.7).
+    metrics_start_label_since: date = date(2024, 3, 4)
 
 
 API_LIMITS = ApiLimits()
@@ -66,7 +69,7 @@ class DataConfig:
 
 @dataclass(frozen=True, slots=True)
 class RuntimeConfig:
-    log_level: str = "INFO"
+    log_level: str = "WARNING"
     archive_base_url: str = "https://data.binance.vision/data"
     rest_base_url: str = "https://fapi.binance.com"
     http_timeout_seconds: float = 30.0

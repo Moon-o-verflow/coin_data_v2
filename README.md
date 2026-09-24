@@ -42,7 +42,7 @@ coindata --help
 
 종료 코드: `0` 정상, `1` 부분 실패(이번 실행에서 데이터 취득에 실패), `2` 실행 불가(설정 오류, 다른 명령 실행 중, 저장소 없음 등).
 
-진행 상황과 결과는 표준 출력, 로그는 표준 오류로 나온다. 로그 수준은 `runtime.log_level`로 바꾼다.
+진행 상황과 결과는 표준 출력, 로그는 표준 오류로 나온다. 기본 로그 수준은 WARNING이며, 요청마다 기록을 보려면 `runtime.log_level = "INFO"`로 바꾼다.
 
 ## 스케줄 실행 (선택)
 
@@ -74,8 +74,8 @@ python -m unittest discover -s tests -t .
 `scripts/verify_metrics.py`는 PRD 15.7의 미확인 사항을 실제 데이터로 확인한다.
 
 ```
-python scripts/verify_metrics.py timestamp     # metrics create_time의 의미 (아카이브만 사용)
-python scripts/verify_metrics.py mapping       # 아카이브 컬럼 ↔ REST 필드 대응 (REST 접근 필요)
+python scripts/verify_metrics.py timestamp     # 저장되는 metrics ts가 구간 끝 시각인지 (아카이브만 사용)
+python scripts/verify_metrics.py mapping       # 아카이브 컬럼 ↔ REST 필드 대응과 시각 보정 (REST 접근 필요)
 ```
 
 결과는 PRD 15.7에 기록한다.

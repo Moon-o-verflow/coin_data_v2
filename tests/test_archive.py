@@ -5,7 +5,7 @@ import unittest
 from datetime import date
 
 from coindata.ingest.archive import ArchiveClient
-from coindata.ingest.archive_parse import ArchiveParseError, parse_archive_csv
+from coindata.ingest.archive_parse import ArchiveParseError, archive_day_of, archive_day_range, parse_archive_csv
 from coindata.ingest.http import RequestExecutor, RequestFailedError, RetryPolicy
 from coindata.ingest.timeutil import day_start_ms
 from coindata.models import ArchiveOutcome, Dataset, Kline, MetricsRow, PremiumKline
@@ -54,9 +54,10 @@ class ParseTest(unittest.TestCase):
             "2026-09-22 00:35:00,ETHUSDT,2337149.9340000000000000,6465182528.2290030000000000,1.23328746,1.50976400,2.31210574,0.92039800\n"
         )
         rows = parse_archive_csv(Dataset.METRICS_5M, SYMBOL, DAY, metrics)
+        # create_time 00:35는 구간 시작이고, ts는 구간 끝 00:40이다
         self.assertEqual(
             rows[0],
-            MetricsRow(SYMBOL, START + 35 * 60_000, 2337149.934, 6465182528.229003, 1.509764, 1.23328746, 2.31210574, 0.920398),
+            MetricsRow(SYMBOL, START + 40 * 60_000, 2337149.934, 6465182528.229003, 1.509764, 1.23328746, 2.31210574, 0.920398),
         )
 
     def test_premium_uses_count_as_sample_count(self) -> None:
@@ -71,12 +72,28 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(len(rows), 288)
         times = [row.ts for row in rows if isinstance(row, MetricsRow)]
         self.assertEqual(times, sorted(times))
-        self.assertEqual(times[0], START)
+        self.assertEqual(times[0], START + 5 * 60_000)  # ts는 구간 끝 시각
         first = rows[0]
         assert isinstance(first, MetricsRow)
         self.assertIsNone(first.taker_buy_sell_ratio)  # 빈 칸은 0이 아니라 None
         self.assertEqual(first.top_position_ratio, 1.5)  # sum_toptrader → top_position
         self.assertEqual(first.top_account_ratio, 1.2)  # count_toptrader → top_account
+
+    def test_metrics_label_before_2024_03_04_is_period_end(self) -> None:
+        """2024-03-03 이전 파일의 create_time은 이미 구간 끝이므로 그대로 쓴다(PRD 15.7)."""
+        header = metrics_csv(DAY).splitlines()[0]
+        old = parse_archive_csv(Dataset.METRICS_5M, SYMBOL, date(2024, 3, 3), header + "\n2024-03-03 00:00:00,ETHUSDT,1,1,1,1,1,1\n")
+        new = parse_archive_csv(Dataset.METRICS_5M, SYMBOL, date(2024, 3, 4), header + "\n2024-03-04 00:00:00,ETHUSDT,1,1,1,1,1,1\n")
+        self.assertEqual(old[0].ts, day_start_ms(date(2024, 3, 3)))
+        self.assertEqual(new[0].ts, day_start_ms(date(2024, 3, 4)) + 5 * 60_000)
+
+    def test_archive_day_mapping(self) -> None:
+        span = archive_day_range(Dataset.METRICS_5M, DAY)
+        self.assertEqual((span.start_ms, span.end_ms), (START + 5 * 60_000, START + 86_400_000))
+        self.assertEqual(archive_day_of(Dataset.METRICS_5M, START), date(2026, 9, 21))  # 00:00에 끝난 구간은 전날 파일
+        self.assertEqual(archive_day_of(Dataset.METRICS_5M, START + 86_400_000), DAY)
+        self.assertEqual(archive_day_of(Dataset.KLINE_1M, START), DAY)
+        self.assertEqual(archive_day_of(Dataset.METRICS_5M, day_start_ms(date(2024, 3, 3))), date(2024, 3, 3))
 
     def test_rejects_microsecond_timestamps(self) -> None:
         text = "1790035200000000,1,1,1,1,1,1790035259999999,1,1,1,1,0\n"
