@@ -99,10 +99,14 @@ def check_mapping(archive: ArchiveClient, rest: BinanceRestClient, symbol: str, 
     for archive_field in METRICS_FIELDS:
         rates = [_match_rate(archive_rows, rest_rows, archive_field, rest_field, best_offset * MINUTE_MS)[0] for rest_field in METRICS_FIELDS]
         print(f"  {archive_field:<26}" + "".join(f"{rate * 100:12.1f}%" for rate in rates))
-        best = METRICS_FIELDS[max(range(len(rates)), key=rates.__getitem__)]
-        if best != archive_field or max(rates) < 0.99:
+        # REST는 비율을 소수 4자리로 반올림하므로 판정은 허용오차 1%로 한다(PRD 15.7).
+        loose = [_match_rate(archive_rows, rest_rows, archive_field, rest_field, best_offset * MINUTE_MS, 1e-2)[0] for rest_field in METRICS_FIELDS]
+        own = loose[METRICS_FIELDS.index(archive_field)]
+        others = max(rate for name, rate in zip(METRICS_FIELDS, loose) if name != archive_field)
+        if own < 0.99 or others > 0.5:
             all_ok = False
-    print("  결론: 8.4 매핑표가 " + ("맞다 (모든 컬럼이 같은 이름의 REST 필드와 99% 이상 일치)." if all_ok else "틀렸거나 불확실하다. 아래 필드별 상세를 PRD 15.7에 기록한다."))
+    print("  (위 표는 허용오차 0.01% 기준. REST 반올림 때문에 비율 컬럼은 100%가 아닐 수 있다)")
+    print("  결론: 8.4 매핑표가 " + ("맞다 (같은 이름끼리 허용오차 1%로 99% 이상 일치, 다른 조합은 불일치)." if all_ok else "틀렸거나 불확실하다. 아래 필드별 상세를 PRD 15.7에 기록한다."))
 
     print("  필드별 상세: 같은 이름끼리, 필드마다 가장 잘 맞는 시각 차이와 값 샘플")
     for name in METRICS_FIELDS:
