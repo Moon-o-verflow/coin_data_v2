@@ -189,6 +189,7 @@ class LevelEventConfig:
 
 @dataclass(frozen=True, slots=True)
 class VolumeSpikeConfig:
+    timeframes: tuple[str, ...] = ("15m", "30m", "1h")
     lookback: int = 20
     mult: float = 2.0
 
@@ -349,6 +350,7 @@ def _validate(config: Config) -> None:
             date.fromisoformat(config.compute.anchor_time)
         except ValueError:
             problems.append("compute.anchor_time: 빈 문자열 또는 YYYY-MM-DD여야 한다")
+    problems += _validate_timeframes(config)
     report = config.report
     if min(report.swings_per_tf, report.stale_minutes_bars, report.stale_minutes_metrics) < 1:
         problems.append("report.swings_per_tf, stale_minutes_*: 1 이상이어야 한다")
@@ -356,3 +358,39 @@ def _validate(config: Config) -> None:
         problems.append("report.digits_*: 0 이상이어야 한다")
     if problems:
         raise ConfigError("; ".join(problems))
+
+
+_TF_UNITS = ("m", "h", "d")
+
+
+def _is_timeframe(tf: str) -> bool:
+    return len(tf) >= 2 and tf[-1] in _TF_UNITS and tf[:-1].isdigit() and int(tf[:-1]) >= 1
+
+
+def _validate_timeframes(config: Config) -> list[str]:
+    """타임프레임 표기와, 보조 목록이 계산 대상 TF 안에 있는지 검사한다."""
+    problems: list[str] = []
+    timeframes = config.indicators.timeframes
+    groups = {
+        "indicators.timeframes": timeframes,
+        "regime.shock.timeframes": config.regime.shock.timeframes,
+        "events.level.timeframes": config.events.level.timeframes,
+        "events.volume_spike.timeframes": config.events.volume_spike.timeframes,
+        "derivatives.quadrant.periods": config.derivatives.quadrant.periods,
+        "derivatives.premium.windows": config.derivatives.premium.windows,
+        "derivatives.premium.smoothing_tf": (config.derivatives.premium.smoothing_tf,),
+        "events.report_bars": tuple(config.events.report_bars),
+    }
+    for key, values in groups.items():
+        bad = [tf for tf in values if not _is_timeframe(tf)]
+        if bad:
+            problems.append(f"{key}: 타임프레임 표기가 아니다: {', '.join(bad)}")
+    for key in ("regime.shock.timeframes", "events.level.timeframes", "events.volume_spike.timeframes"):
+        outside = [tf for tf in groups[key] if tf not in timeframes]
+        if outside:
+            problems.append(f"{key}: indicators.timeframes에 없는 TF: {', '.join(outside)}")
+    needed = set(timeframes) | {config.derivatives.premium.smoothing_tf}
+    missing = sorted(needed - set(config.events.report_bars))
+    if missing:
+        problems.append(f"events.report_bars: 보고 기간이 없는 TF: {', '.join(missing)}")
+    return problems

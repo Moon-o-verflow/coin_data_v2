@@ -183,6 +183,22 @@ class QueryTest(StoreTestCase):
         status = {s.dataset: s for s in query.dataset_statuses(self.conn, SYMBOL)}[Dataset.KLINE_1M]
         self.assertEqual((status.row_count, status.first_ms, status.last_ms, status.last_ingested_at), (2, T, T + 5 * MIN, 9))
 
+    def test_range_queries_for_compute(self) -> None:
+        writer.store_rest_rows(self.conn, Dataset.KLINE_1M, [kline(T + 2 * MIN), kline(T), kline(T + MIN)], 9)
+        self.assertEqual([k.open_time for k in query.klines_between(self.conn, SYMBOL, T, T + 2 * MIN)], [T, T + MIN])
+        self.assertEqual(query.klines_between(self.conn, SYMBOL, T, T + MIN)[0], kline(T))
+        rows = [
+            MetricsRow(SYMBOL, T + 5 * MIN, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0),
+            MetricsRow(SYMBOL, T + 10 * MIN, 1.5, 2.5, 3.5, 4.5, 5.5, None),
+        ]
+        writer.store_rest_rows(self.conn, Dataset.METRICS_5M, rows, 9)
+        self.assertEqual(query.metrics_between(self.conn, SYMBOL, T, T + 10 * MIN), rows)
+        latest = {m.field: (m.value, m.ts) for m in query.latest_metrics(self.conn, SYMBOL, T + 10 * MIN)}
+        self.assertEqual(latest["sum_open_interest"], (1.5, T + 10 * MIN))
+        self.assertEqual(latest["taker_buy_sell_ratio"], (6.0, T + 5 * MIN))
+        latest = {m.field: m.value for m in query.latest_metrics(self.conn, SYMBOL, T)}
+        self.assertIsNone(latest["sum_open_interest"])
+
 
 if __name__ == "__main__":
     unittest.main()

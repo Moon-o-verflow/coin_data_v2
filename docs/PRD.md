@@ -1272,7 +1272,7 @@ TF별로 최근 `R_tf`개 마감 봉 안에서 발생한 이벤트만 보고한�
 |---|---|---|---|---|
 | `swing_confirmed` | price_structure | 전체 | A.3.2에서 스윙 확정 | `swing_type`, `price`, `extreme_bar_time`, `lag_bars`(극점→확정 봉 수) |
 | `structure_break` | price_structure | 전체 | A.3.4 돌파 발생 | `side`(`above_swing_high`/`below_swing_low`), `break_kind`, `swing_price`, `close_beyond_atr`(\|C_t − swing\| / ATR_{t−1}), `displacement_mult` |
-| `volume_spike` | price_structure | 15m, 30m, 1h | `vol_t / mean(vol, t−N..t−1) ≥ v_th` | `volume_mult` |
+| `volume_spike` | price_structure | 거래량 이벤트 TF | `vol_t / mean(vol, t−N..t−1) ≥ v_th` | `volume_mult` |
 | `efficiency_state_change` | regime | 전체 | `efficiency_state`가 직전 봉과 다름 | `from`, `to`, `er` |
 | `volatility_state_change` | regime | 전체 | `volatility_state`가 직전 봉과 다름 | `from`, `to`, `pct` |
 | `shock_start` | regime | shock 판정 TF | A.4.4 발동 (연장 제외) | `trigger`(`wick`/`rapid_reversal`/`both`), `wick_ratio`, `range_atr` |
@@ -1291,6 +1291,7 @@ TF별로 최근 `R_tf`개 마감 봉 안에서 발생한 이벤트만 보고한�
   - 허용하는 잔여 미래 참조: 정규화에 쓰는 ATR_1h는 기준 시각 값이다. 척도에만 영향을 주므로 허용한다. `vwap_24h`는 현재 봉의 거래량을 포함한다.
 - `penetration_atr`: zone 가장자리부터 봉의 극값까지 zone 안쪽으로 들어간 거리 / 기준 시각의 ATR_1h.
 - 레벨 이벤트의 `close_beyond_atr`: zone 가장자리부터 `C_t`까지의 거리 / 기준 시각의 ATR_1h.
+- 거래량 이벤트 TF: 설정값 `events.volume_spike.timeframes` (기본 `15m`, `30m`, `1h`).
 - `volume_spike` 기본값: `N = 20`, `v_th = 2.0`.
 - `premium_extreme` 기본값: `p_high = 95`, `p_low = 5`. 보고 기간은 평활 TF의 보고 기간(`15m = 16`)을 따른다.
 - 검증 상태: 모든 임계값 `미검증`.
@@ -1373,6 +1374,7 @@ TF별로 최근 `R_tf`개 마감 봉 안에서 발생한 이벤트만 보고한�
 | `events.report_bars` | {15m: 16, 30m: 8, 1h: 8, 1d: 3} | A.8.2 |
 | `events.quadrant_change.report_minutes` | 240 | A.8.2 |
 | `events.level.timeframes` | ["15m"] | A.8.3 |
+| `events.volume_spike.timeframes` | ["15m", "30m", "1h"] | A.8.3 |
 | `events.volume_spike.lookback` | 20 | A.8.3 |
 | `events.volume_spike.mult` | 2.0 | A.8.3 |
 | `events.premium_extreme.high` | 95 | A.8.3 |

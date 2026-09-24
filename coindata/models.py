@@ -83,6 +83,15 @@ Row = Kline | PremiumKline | MetricsRow
 
 
 @dataclass(frozen=True, slots=True)
+class LatestMetric:
+    """metrics 컬럼 하나의 NULL이 아닌 가장 최근 값. 컬럼마다 시각이 다를 수 있다(D-10)."""
+
+    field: str
+    value: float | None
+    ts: int | None
+
+
+@dataclass(frozen=True, slots=True)
 class TimeRange:
     start_ms: int
     end_ms: int

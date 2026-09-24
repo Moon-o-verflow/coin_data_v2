@@ -11,7 +11,12 @@ from coindata.models import (
     Dataset,
     DatasetStatus,
     GapReason,
+    Kline,
+    LatestMetric,
+    METRICS_FIELDS,
+    MetricsRow,
     OpenGap,
+    PremiumKline,
     RunMode,
     RunRecord,
     RunStatus,
@@ -96,3 +101,47 @@ def last_run(conn: sqlite3.Connection) -> RunRecord | None:
         return None
     run_id, mode, started, finished, status, detail = row
     return RunRecord(run_id, RunMode(mode), started, finished, RunStatus(status) if status else None, detail)
+
+
+# ---------------------------------------------------------------------------
+# 계산용 조회 (compute가 쓰는 인터페이스). 구간은 [start_ms, end_ms) 반열림이며 시각 오름차순이다.
+# ---------------------------------------------------------------------------
+
+
+def klines_between(conn: sqlite3.Connection, symbol: str, start_ms: int, end_ms: int) -> list[Kline]:
+    rows = conn.execute(
+        "SELECT open_time, open, high, low, close, volume, quote_volume, trade_count, taker_buy_volume, "
+        "taker_buy_quote_volume FROM kline_1m WHERE symbol = ? AND open_time >= ? AND open_time < ? ORDER BY open_time",
+        (symbol, start_ms, end_ms),
+    )
+    return [Kline(symbol, *row) for row in rows]
+
+
+def premium_between(conn: sqlite3.Connection, symbol: str, start_ms: int, end_ms: int) -> list[PremiumKline]:
+    rows = conn.execute(
+        "SELECT open_time, open, high, low, close, sample_count FROM premium_index_1m "
+        "WHERE symbol = ? AND open_time >= ? AND open_time < ? ORDER BY open_time",
+        (symbol, start_ms, end_ms),
+    )
+    return [PremiumKline(symbol, *row) for row in rows]
+
+
+def metrics_between(conn: sqlite3.Connection, symbol: str, start_ms: int, end_ms: int) -> list[MetricsRow]:
+    """`ts`가 [start_ms, end_ms]인 행. metrics의 ts는 구간 끝 시각이므로 끝을 포함한다."""
+    rows = conn.execute(
+        f"SELECT ts, {', '.join(METRICS_FIELDS)} FROM metrics_5m WHERE symbol = ? AND ts >= ? AND ts <= ? ORDER BY ts",
+        (symbol, start_ms, end_ms),
+    )
+    return [MetricsRow(symbol, *row) for row in rows]
+
+
+def latest_metrics(conn: sqlite3.Connection, symbol: str, until_ms: int) -> list[LatestMetric]:
+    """컬럼마다 `ts <= until_ms`이고 값이 NULL이 아닌 가장 최근 행의 값."""
+    result = []
+    for name in METRICS_FIELDS:
+        row = conn.execute(
+            f"SELECT {name}, ts FROM metrics_5m WHERE symbol = ? AND ts <= ? AND {name} IS NOT NULL ORDER BY ts DESC LIMIT 1",
+            (symbol, until_ms),
+        ).fetchone()
+        result.append(LatestMetric(name, row[0], row[1]) if row else LatestMetric(name, None, None))
+    return result
