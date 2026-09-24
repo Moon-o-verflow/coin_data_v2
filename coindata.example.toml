@@ -92,3 +92,16 @@ mult = 2.0
 [events.premium_extreme]
 high = 95.0
 low = 5.0
+
+[compute]
+anchor_time = ""                  # 경로 의존 계산의 시작일 YYYY-MM-DD. 비우면 저장소 첫 1분봉 (A.1.8)
+
+[report]
+output_dir = "summaries"
+swings_per_tf = 6
+stale_minutes_bars = 3            # 실행 시각 대비 이만큼 늦으면 경고 (FR-4.3)
+stale_minutes_metrics = 15
+digits_price = 2
+digits_ratio = 3
+digits_bp = 2
+digits_pct = 1

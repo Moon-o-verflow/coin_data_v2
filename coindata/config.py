@@ -213,6 +213,23 @@ class EventsConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ComputeConfig:
+    anchor_time: str = ""  # A.1.8. 빈 문자열이면 저장소의 첫 1분봉 시각
+
+
+@dataclass(frozen=True, slots=True)
+class ReportConfig:
+    output_dir: str = "summaries"  # FR-4.5
+    swings_per_tf: int = 6
+    stale_minutes_bars: int = 3  # FR-4.3, 1분봉·프리미엄
+    stale_minutes_metrics: int = 15  # FR-4.3
+    digits_price: int = 2
+    digits_ratio: int = 3
+    digits_bp: int = 2
+    digits_pct: int = 1
+
+
+@dataclass(frozen=True, slots=True)
 class Config:
     data: DataConfig = field(default_factory=DataConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
@@ -221,6 +238,8 @@ class Config:
     derivatives: DerivativesConfig = field(default_factory=DerivativesConfig)
     levels: LevelsConfig = field(default_factory=LevelsConfig)
     events: EventsConfig = field(default_factory=EventsConfig)
+    compute: ComputeConfig = field(default_factory=ComputeConfig)
+    report: ReportConfig = field(default_factory=ReportConfig)
 
 
 # ---------------------------------------------------------------------------
@@ -325,5 +344,15 @@ def _validate(config: Config) -> None:
         problems.append("runtime.rate_limit_ratio: 0보다 크고 1 이하여야 한다")
     if runtime.db_busy_timeout_ms < 0:
         problems.append("runtime.db_busy_timeout_ms: 0 이상이어야 한다")
+    if config.compute.anchor_time:
+        try:
+            date.fromisoformat(config.compute.anchor_time)
+        except ValueError:
+            problems.append("compute.anchor_time: 빈 문자열 또는 YYYY-MM-DD여야 한다")
+    report = config.report
+    if min(report.swings_per_tf, report.stale_minutes_bars, report.stale_minutes_metrics) < 1:
+        problems.append("report.swings_per_tf, stale_minutes_*: 1 이상이어야 한다")
+    if min(report.digits_price, report.digits_ratio, report.digits_bp, report.digits_pct) < 0:
+        problems.append("report.digits_*: 0 이상이어야 한다")
     if problems:
         raise ConfigError("; ".join(problems))
