@@ -25,7 +25,7 @@
 - **서술형 이름 규칙**: 방향이 있는 사실은 가격 기준의 위치와 변화로만 표현한다. `above`/`below`, `up`/`down`, `high`/`low`를 사용한다. 예: `break_side: "above_swing_high"`, 4분면 `oi_up_price_up`.
 - 해석이 담긴 관용 라벨(롱 빌드업, 숏 커버링 등)을 값이나 필드명으로 쓰지 않는다.
 - **금지어 목록**: 요약 JSON의 키와 문자열 값에 아래 단어를 snake_case 토큰으로 포함하지 않는다. T-6은 이 목록으로 검사한다.
-  `signal`, `recommendation`, `recommend`, `bias`, `bullish`, `bearish`, `entry`, `exit`, `target`, `stop_loss`, `take_profit`, `probability`, `prob`, `win_rate`, `expected_value`, `confidence`, `score`
+  `signal`, `recommendation`, `recommend`, `bias`, `bullish`, `bearish`, `entry`, `exit`, `target`, `stop_loss`, `take_profit`, `probability`, `prob`, `win_rate`, `expected_value`, `confidence`, `score`, `support`, `resistance`
 - 원천 데이터의 고유 명칭(`taker_buy_volume`, `taker_buy_sell_ratio` 등)은 방향 판정이 아니므로 허용한다.
 
 **R-3. 결측을 채우지 않는다.**
@@ -225,17 +225,18 @@ API 동작이 불확실하면 공식 문서를 확인하거나 질문한다. 기
 | 스윙 고점/저점 | ATR 기반 ZigZag로 확정된 파동의 극점 |
 | 확정 파동 | 반전 임계값을 충족하여 극점이 확정된 파동 |
 | 잠정 파동 | 진행 중이며 극점이 확정되지 않은 파동 |
-| BOS | 직전 확정 스윙 극점을 종가 기준으로 추세 방향으로 돌파 |
-| MSS | 추세 반대 방향의 극점을 변위 조건과 함께 돌파 |
+| 구조 상태 | 최근 확정 스윙 고점 2개와 저점 2개의 대소로 판정한 상태. higher_highs_higher_lows / lower_highs_lower_lows / mixed / insufficient (`docs/PRD.md` A.3.3) |
+| BOS | 아직 돌파되지 않은 확정 스윙 극점을 구조 상태와 같은 방향으로 종가 돌파 |
+| MSS | 구조 상태와 반대 방향으로 확정 스윙 극점을 변위 조건과 함께 종가 돌파 |
 | 변위 | 돌파 봉의 몸통이 최근 N봉 평균 몸통의 설정 배수 이상인 상태 |
 | 되돌림 깊이 | 직전 확정 파동 범위 대비 기준 가격의 역방향 진행 비율. 0~1로 자르지 않음 |
 | 되돌림 시간 비율 | 조정 구간 봉 수 / 동인 파동 봉 수 |
-| 레짐 | trend / range / transition / shock 중 하나의 시장 상태 |
-| 충격 상태 | 캔들 꼬리 비율 또는 급속 구조 전환으로 판정된 상태. 레짐 판정을 덮어씀 |
+| 레짐 | 두 개의 독립 축. 효율성 축(trend / range / transition, shock 활성 시 shock)과 변동성 축(expansion / normal / compression). 두 축을 합성하지 않음 |
+| 충격 상태 | 큰 봉의 꼬리 비율 또는 짧은 간격 안의 양방향 돌파로 판정된 상태. 효율성 축만 덮어씀 |
 | 4분면 | 계약 수 미결제약정 증감과 가격 증감의 조합으로 분류한 포지션 흐름 상태 |
 | 레벨 구간 | 레벨 중심 ± 설정 배수 × ATR로 정의된 가격 구간 |
 | 계열 | 지표의 정보 출처 분류. price_structure / regime / derivatives / level |
-| 결손 표시 | 결측 데이터가 계산에 포함되었음을 나타내는 플래그 |
+| 결손 표시 | 계산 창 안의 결측 1분봉 비율(분 단위). 창에 부재 봉이 있으면 지표값은 `null` |
 | 1초 버킷 | 체결 데이터를 1초 단위로 사전 집계한 레코드 (이번 버전 범위 밖) |
 
 ---
