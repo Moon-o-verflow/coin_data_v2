@@ -191,7 +191,7 @@ def _run_summary_command(
             try:
                 ensure_schema(conn)
                 clients = build_clients(config, runtime) if at_ms is None else None
-                result = run_summary(conn, config, output_dir, runtime.clock, clients, at_ms)
+                result = run_summary(conn, config, output_dir, runtime.clock, runtime.sleeper, clients, at_ms)
             finally:
                 conn.close()
     except (LockError, SummaryError, SummaryExistsError) as exc:

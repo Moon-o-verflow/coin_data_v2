@@ -202,6 +202,13 @@ class HistoricalSummaryTest(SummaryTestCase):
         _, live = self.summary()
         self.assertIsNone(live["state"]["previous"])
 
+    def test_back_to_back_runs_in_same_second(self) -> None:
+        code1, out1 = self.run_cli("summary")
+        code2, out2 = self.run_cli("summary", "--at", AT1)
+        self.assertEqual((code1, code2), (EXIT_OK, EXIT_OK))
+        self.assertNotEqual(out1.strip(), out2.strip())
+        self.assertEqual(len(self.query("SELECT summary_id FROM summary_log")), 2)
+
     def test_near_anchor_runs_with_insufficient_history(self) -> None:
         code, doc = self.summary("--at", "2026-09-21T02:00Z")
         self.assertEqual(code, EXIT_OK)

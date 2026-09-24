@@ -17,7 +17,7 @@ from coindata.cli.flows import IngestFlow, run_sync
 from coindata.compute.engine import ComputeError, analyze, load_input
 from coindata.config import Config
 from coindata.ingest.archive import ArchiveClient
-from coindata.ingest.http import Clock, RequestFailedError
+from coindata.ingest.http import Clock, RequestFailedError, Sleeper
 from coindata.ingest.rest import BinanceRestClient, RestSchemaError
 from coindata.models import MINUTE_MS, Dataset, FundingInfo, Kline, RunMode, RunStatus, SummaryTrigger
 from coindata.report.save import save_summary
@@ -25,6 +25,9 @@ from coindata.report.summary import DatasetLast, SummaryContext, build_summary, 
 from coindata.store import query, writer
 
 logger = logging.getLogger(__name__)
+
+# 요약 ID(초 단위)가 이미 있을 때 다음 초로 넘기며 다시 만드는 횟수. 조정 대상이 아니라 무한 대기를 막는 한도다.
+_ID_ATTEMPTS = 3
 
 
 class SummaryError(Exception):
@@ -60,6 +63,7 @@ def run_summary(
     config: Config,
     output_dir: Path,
     clock: Clock,
+    sleeper: Sleeper,
     clients: tuple[ArchiveClient, BinanceRestClient] | None,
     at_ms: int | None,
 ) -> SummaryResult:
@@ -90,8 +94,7 @@ def run_summary(
         raise SummaryError(str(exc)) from exc
     analysis = analyze(inp, config)
 
-    created_at = clock.now_ms()
-    summary_id = summary_id_of(created_at)
+    created_at, summary_id = _new_summary_id(conn, output_dir, clock, sleeper)
     dataset_last = () if at_ms is not None else _dataset_last(conn, symbol)
     ctx = SummaryContext(
         summary_id=summary_id,
@@ -112,6 +115,17 @@ def run_summary(
     built = build_summary(ctx)
     path = save_summary(conn, output_dir, built, summary_id, created_at, trigger, analysis.ref_time, analysis.ref_price)
     return SummaryResult(path, summary_id, bool(failures), failures)
+
+
+def _new_summary_id(conn: sqlite3.Connection, output_dir: Path, clock: Clock, sleeper: Sleeper) -> tuple[int, str]:
+    """FR-4.5의 요약 ID는 초 단위다. 같은 초에 이미 요약이 있으면(연달아 실행한 경우) 다음 초까지 기다린다."""
+    for _ in range(_ID_ATTEMPTS):
+        created_at = clock.now_ms()
+        summary_id = summary_id_of(created_at)
+        if not (output_dir / f"{summary_id}.json").exists() and not query.summary_exists(conn, summary_id):
+            return created_at, summary_id
+        sleeper.sleep((1000 - created_at % 1000) / 1000)
+    raise SummaryError(f"요약 ID를 만들 수 없다: {summary_id}가 이미 있다")
 
 
 def _refresh(
