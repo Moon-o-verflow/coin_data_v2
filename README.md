@@ -1,11 +1,34 @@
 # coinDataMinning v3
 
-바이낸스 USD-M 무기한 선물 ETHUSDT의 시장 상태를 구조화된 JSON으로 만드는 CLI다.
+바이낸스 USD-M 무기한 선물 ETHUSDT의 시장 상태를 구조화된 JSON으로 만드는 프로그램이다. 한 화면 GUI와 CLI를 제공한다.
 요구사항은 [`docs/PRD.md`](docs/PRD.md), 작업 규칙은 [`CLAUDE.md`](CLAUDE.md)에 있다.
 
-현재 구현 범위는 1단계(수집·저장)와 2단계(계산·요약)다.
+## GUI (Windows 실행 파일)
 
-## 빠른 시작
+Python 설치 없이 `coindata.exe`를 두 번 눌러 쓴다.
+
+**받기**: GitHub 저장소 → Actions → `build-exe` → 가장 최근 성공한 실행 → 아래 Artifacts의 `coindata-windows`를 내려받아 압축을 푼다.
+(GitHub에 로그인해야 받을 수 있고, 결과물은 90일 동안 보관된다. 수동으로 다시 만들려면 `build-exe`에서 Run workflow.)
+
+**처음 한 번**
+1. 압축을 푼 폴더를 원하는 곳에 둔다. 설정·저장소(`db`)·요약(`summaries`)이 모두 이 폴더에 생긴다.
+2. `coindata.exe` 실행. "Windows의 PC 보호" 경고가 뜨면 "추가 정보" → "실행"(서명하지 않은 실행 파일이라 뜨는 경고다).
+3. [초기 적재…] → 기간(기본 130일) 확인. 수십 분 걸린다. 진행은 아래 로그 칸에 보인다.
+
+**매번**
+- [요약 실행] → 목록에서 요약 선택 → [복사] 또는 [압축 복사] → 판단 모델에 붙여넣기.
+- 과거 시점은 "과거 시점(UTC)" 칸에 `2026-05-29T12:05Z`처럼 넣고 [요약 실행].
+- 판단 모델 답변의 ```` ```json ```` 블록을 계획 칸에 그대로 붙여넣고 [검증] → 오류가 없으면 [등록].
+  `plan_id`가 없으면 `p1`, `p2`…가 자동으로 붙는다. `source_summary_id`는 반드시 있어야 한다.
+  검증 결과에 등록 시 계산값(risk·reward 거리, 가장 가까운 반대 레벨)이 나온다.
+- 계획 목록에서 pending 계획을 골라 [선택 취소].
+- [동기화]는 데이터만 받는다. [요약 실행]도 실행 전에 데이터를 받아 오므로 보통은 필요 없다.
+
+**새 버전으로 바꾸기**: `coindata.exe`만 새 파일로 바꾼다. `db`, `summaries`, `coindata.toml`은 그대로 둔다.
+
+Python이 설치되어 있으면 `python -m coindata gui`로도 같은 창을 연다.
+
+## CLI 빠른 시작
 
 처음 한 번:
 
@@ -192,7 +215,10 @@ coindata/
   store/        SQLite 적재, 조회, 결측 관리 (외부 요청을 하지 않음)
   compute/      봉 합성, 지표, 스윙·구조, 레짐, 파생 지표, 레벨, 이벤트 (저장소 조회만 사용)
   report/       요약 JSON 조립, 직렬화, 요약 파일 저장
-  cli/          명령 해석, 흐름 조립(ingest 결과를 store에 적재), 잠금
+  cli/          명령 해석, 흐름 조립(ingest 결과를 store에 적재), 잠금. service.py는 CLI와 GUI가 함께 쓰는 명령 처리부
+  gui/          한 화면 tkinter 창, 계획 붙여넣기 해석, 작업 스레드 (cli만 호출)
+packaging/      실행 파일 진입 스크립트와 동봉 안내
+.github/        Windows 실행 파일 빌드 (GitHub Actions)
 tests/          오프라인 테스트 (가짜 바이낸스 서버 포함)
 scripts/        실데이터 검증 도구
 ```

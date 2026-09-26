@@ -1,3 +1,8 @@
+"""진입점. `python -m coindata`와 설치 명령 `coindata`가 여기로 들어온다.
+
+`cli`는 `gui`를 참조하지 않으므로(7.2) GUI 실행기는 여기서 넘긴다.
+"""
+
 import sys
 from pathlib import Path
 
@@ -10,4 +15,9 @@ def _run_gui(config: Path | None) -> int:
     return run_gui(config)
 
 
-sys.exit(main(gui_runner=_run_gui))
+def run() -> int:
+    return main(gui_runner=_run_gui)
+
+
+if __name__ == "__main__":
+    sys.exit(run())

@@ -117,7 +117,7 @@ class App:
         top = ttk.Frame(self.root, padding=PAD)
         top.pack(fill=tk.X)
         config_text = str(self.paths.config_path) if self.paths.config_path else "기본값 (설정 파일 없음)"
-        ttk.Label(top, text=f"설정: {config_text}    저장소: {self.paths.db_path}").pack(side=tk.LEFT)
+        ttk.Label(top, text=f"설정: {config_text}\n저장소: {self.paths.db_path}").pack(side=tk.LEFT)
         bar = ttk.Frame(self.root, padding=PAD)
         bar.pack(fill=tk.X)
         self.overview_label = ttk.Label(bar, text="")

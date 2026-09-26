@@ -13,7 +13,10 @@ dependencies = [
 ]
 
 [project.scripts]
-coindata = "coindata.cli:main"
+coindata = "coindata.__main__:run"
+
+[project.gui-scripts]
+coindata-gui = "coindata.gui:main"
 
 [tool.setuptools.packages.find]
 include = ["coindata*"]

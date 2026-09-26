@@ -2,7 +2,7 @@
 
 | 항목 | 내용 |
 |---|---|
-| 문서 버전 | 1.15 |
+| 문서 버전 | 1.16 |
 | 작성일 | 2026-09-24 |
 | 대상 시스템 | 바이낸스 USD-M 무기한 선물 ETH/USDT 판단 재료 생성기 |
 | 선행 버전 | coinDataMinning v2.1.3 |
@@ -20,6 +20,7 @@
 | 1.6 | 2단계 결정: 신선도를 실행 시각 기준으로 판정(FR-4.3), 요약 파일명·상태 비교 항목·`unavailable`·표기 규칙(FR-4.1~4.5), 경로 의존 계산의 고정 시작점(A.1.8), `compute`·`report` 설정 |
 | 1.7 | 부록 A v1.1: 돌파 대상을 유형별 최신 확정 스윙 하나로 한정(A.3.4), shock 시작의 효율성 변화 이벤트 중복 제거, 레벨 스윙 출처·정규화 TF 설정화, 5m·평활 TF 이벤트의 `tf`·`bars_ago` 기준 명시 |
 | 1.8 | 과거 시점 요약 `summary --at`(FR-4.8), `summary_log.trigger`에 `historical` 추가(스키마 버전 2), 요약 출력 단위 보완(FR-4.1) |
+| 1.16 | 실행 파일 배포 확정(FR-8.9): PyInstaller 단일 파일(빌드 전용 의존성, C-2 승인), GitHub Actions Windows 빌드, 데이터 폴더는 실행 파일 폴더. 설정 `gui.summary_list_limit`, `gui.poll_ms` |
 | 1.15 | GUI(10.8, FR-8.x) 확정: tkinter 한 화면, 계층 `gui`(7.2), CLI 명령 처리부의 결과 구조체 분리, 계획 붙여넣기 등록. 실행 파일 배포(FR-8.9)는 결정 대기 |
 | 1.14 | 13장 정리: 1분봉 기반 델타·델타 EMA(A.12, CR-2.14)를 체결 기반 지표 항목에서 제외, 체결 규모 분포를 명시. S-2는 사용 데이터 확인 후 결정으로 보류 유지 |
 | 1.13 | CR-2.15 참조 지표(부록 A.13, 계열 `reference`, 요약 섹션 `reference`), CR-2.16 세션 표시(`meta.session`, IANA 시간대 기준). S-1 판정 기간 고정 강제(부록 B.1.8) |
@@ -886,8 +887,13 @@ pending·active 계획과, 종료 시각이 기준 시각 전 `plans.report_hour
 - 화면 없이 확인 가능한 부분은 자동 시험한다: 붙여넣기 해석, `plan_id` 부여, 명령 결과 구조체, 계층 규칙.
 - 화면 연기 시험은 디스플레이가 없으면 건너뛴다. 실제 화면 확인은 사용자 Windows 환경에서 한다.
 
-**FR-8.9 실행 파일 배포 (결정 대기)**
-Python 설치 없이 두 번 눌러 실행하는 단일 실행 파일. 빌드 도구, 빌드 위치, 데이터 폴더 위치를 결정한 뒤 기록한다.
+**FR-8.9 실행 파일 배포**
+Python 설치 없이 두 번 눌러 실행하는 Windows 단일 실행 파일 `coindata.exe`를 제공한다.
+- 빌드 도구: PyInstaller(단일 파일, 콘솔 창 없음). 빌드할 때만 쓰며 프로그램 실행 의존성이 아니다(C-2 승인). 시간대 데이터(`tzdata`)를 함께 넣는다(FR-4.9).
+- 빌드 위치: GitHub Actions의 Windows 실행 환경(`.github/workflows/build-exe.yml`). main에 push, main 대상 PR, 수동 실행 때 시험을 먼저 돌리고 빌드한다. 결과물 `coindata-windows`는 `coindata.exe`, `coindata.example.toml`, 사용 안내로 구성한다.
+- 데이터 폴더: 실행 파일이 있는 폴더. 설정 파일(`coindata.toml`)을 그 폴더에서 찾고, 상대 경로(저장소, 요약 폴더)도 그 폴더 기준으로 푼다. 실행한 현재 폴더와 무관하다.
+- 서명하지 않는다. 처음 실행 시 SmartScreen 경고가 뜰 수 있다.
+- 새 버전은 실행 파일만 바꾼다. 저장소 스키마가 바뀌면 첫 실행에서 자동으로 옮겨진다(9장).
 
 ### 10.6 설정
 
@@ -1712,6 +1718,8 @@ TF별로 최근 `R_tf`개 마감 봉 안에서 발생한 이벤트만 보고한�
 | `stats.s1.horizon_bars` | [4, 8] | 부록 B (변경 시 정의 버전 변경) |
 | `plans.default_ttl_hours` | 24 | FR-7.1 |
 | `plans.report_hours` | 48 | FR-7.6 |
+| `gui.summary_list_limit` | 50 | FR-8.3 |
+| `gui.poll_ms` | 100 | FR-8.4 |
 | `historical.publication_lag_minutes` | {taker_buy_sell_ratio: 10, 나머지 metrics 컬럼: 5} | FR-4.8 |
 
 ---
