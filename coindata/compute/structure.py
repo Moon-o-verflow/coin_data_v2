@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from coindata.compute.indicators import trailing_mean
 from coindata.compute.series import BarSeries
-from coindata.compute.zigzag import HIGH, LOW, Swing
+from coindata.compute.zigzag import HIGH, LOW, Swing, Tentative
 
 HHHL = "higher_highs_higher_lows"
 LHLL = "lower_highs_lower_lows"
@@ -18,17 +18,43 @@ ABOVE = "above_swing_high"
 BELOW = "below_swing_low"
 
 
-def structure_state(swings: Sequence[Swing]) -> str:
+HIGHER = "higher"
+LOWER = "lower"
+EQUAL = "equal"
+
+
+@dataclass(frozen=True, slots=True)
+class StructureState:
+    state: str
+    high_relation: str | None  # higher / lower / equal. 스윙이 모자라거나 ATR이 없으면 None
+    low_relation: str | None
+
+
+def relation(earlier: Swing, later: Swing, atr_values: Sequence[float | None], tol_atr: float) -> str | None:
+    """A.3.3 관계 판정. 허용 오차는 나중 스윙의 확정 봉 직전 봉 ATR 기준이다."""
+    c = later.confirmed_index
+    atr = atr_values[c - 1] if c > 0 else None
+    if atr is None:
+        return None
+    diff = later.price - earlier.price
+    if abs(diff) < tol_atr * atr:
+        return EQUAL
+    return HIGHER if diff > 0 else LOWER
+
+
+def structure_state(swings: Sequence[Swing], atr_values: Sequence[float | None], tol_atr: float) -> StructureState:
     """A.3.3. `swings`는 확정 순서대로다."""
-    highs = [s.price for s in swings if s.type == HIGH]
-    lows = [s.price for s in swings if s.type == LOW]
-    if len(highs) < 2 or len(lows) < 2:
-        return INSUFFICIENT
-    if highs[-1] > highs[-2] and lows[-1] > lows[-2]:
-        return HHHL
-    if highs[-1] < highs[-2] and lows[-1] < lows[-2]:
-        return LHLL
-    return MIXED
+    highs = [s for s in swings if s.type == HIGH]
+    lows = [s for s in swings if s.type == LOW]
+    high_rel = relation(highs[-2], highs[-1], atr_values, tol_atr) if len(highs) >= 2 else None
+    low_rel = relation(lows[-2], lows[-1], atr_values, tol_atr) if len(lows) >= 2 else None
+    if high_rel is None or low_rel is None:
+        return StructureState(INSUFFICIENT, high_rel, low_rel)
+    if high_rel == HIGHER and low_rel == HIGHER:
+        return StructureState(HHHL, high_rel, low_rel)
+    if high_rel == LOWER and low_rel == LOWER:
+        return StructureState(LHLL, high_rel, low_rel)
+    return StructureState(MIXED, high_rel, low_rel)
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +91,7 @@ def analyze_structure(
     atr_values: Sequence[float | None],
     displacement_mult: float,
     displacement_lookback: int,
+    equal_tol_atr: float,
 ) -> StructureResult:
     """봉을 순서대로 보며 구조 상태를 갱신하고 돌파를 판정한다.
 
@@ -103,13 +130,15 @@ def analyze_structure(
                 prev_atr = atr_values[t - 1]
                 beyond = abs(bar.close - level) / prev_atr if prev_atr else None
                 displaced = mult is not None and mult >= displacement_mult
-                current_state = structure_state([swings[i] for i in known + by_confirmation.get(t, [])])
+                current_state = structure_state(
+                    [swings[i] for i in known + by_confirmation.get(t, [])], atr_values, equal_tol_atr
+                ).state
                 breaks.append(Break(t, side, _classify(side, current_state, displaced), swings[target], beyond, mult, current_state))
         for i in by_confirmation.get(t, []):
             targets[swings[i].type] = i
         known += by_confirmation.get(t, [])
         if t in by_confirmation:
-            state = structure_state([swings[i] for i in known])
+            state = structure_state([swings[i] for i in known], atr_values, equal_tol_atr).state
         states.append(state)
     return StructureResult(tuple(states), tuple(breaks), frozenset(broken))
 
@@ -130,3 +159,15 @@ def retracement(swings: Sequence[Swing], ref_price: float, current_index: int) -
     bars_between = b.bar_index - a.bar_index
     time_ratio = (current_index - b.bar_index) / bars_between if bars_between else None
     return Retracement(depth, time_ratio)
+
+
+def retracement_tentative(swings: Sequence[Swing], tentative: Tentative | None, ref_price: float) -> float | None:
+    """A.3.5 진행 파동 기준 깊이: 마지막 확정 스윙 `P_b`에서 잠정 후보 `C`까지의 파동."""
+    if not swings or tentative is None:
+        return None
+    base, c = swings[-1].price, tentative.price
+    if c == base:
+        return None
+    if tentative.dir == "up":
+        return (c - ref_price) / (c - base)
+    return (ref_price - c) / (base - c)

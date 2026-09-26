@@ -261,3 +261,4 @@ class SummaryRecord:
     params_hash: str
     state: str  # FR-4.4 비교용 상태값 JSON
     file_path: str
+    params: str | None  # 사용된 파라미터 원문 JSON. 저장소 스키마 버전 4 이전 기록은 None

@@ -12,17 +12,27 @@ from datetime import date, datetime, timezone
 
 from coindata.compute import derivatives as deriv
 from coindata.compute import events as ev
-from coindata.compute.indicators import Candle, atr, candle, efficiency_ratio, parkinson, rolling_percentile
+from coindata.compute.flow import FlowResult, flow
+from coindata.compute.indicators import Candle, atr, candle, efficiency_ratio, er_direction, parkinson, rolling_percentile
 from coindata.compute.levels import (
     LevelsResult,
+    TouchStats,
     WindowStats,
     candidates,
     levels,
+    touch_stats,
     window_stats,
 )
 from coindata.compute.regime import SHOCK, duration, efficiency_state, shock, volatility_state
 from coindata.compute.series import ZERO_DENOMINATOR, BarSeries, Measured, measure, parse_tf, synthesize
-from coindata.compute.structure import Retracement, analyze_structure, retracement
+from coindata.compute.structure import (
+    Break,
+    Retracement,
+    analyze_structure,
+    retracement,
+    retracement_tentative,
+    structure_state,
+)
 from coindata.compute.zigzag import ZigzagResult, zigzag
 from coindata.config import Config
 from coindata.models import MINUTE_MS, Dataset, Kline, LatestMetric, MetricsRow, PremiumKline
@@ -69,6 +79,7 @@ class TfAnalysis:
     parkinson: Measured
     parkinson_pct: Measured
     er: Measured
+    er_direction: str | None  # A.4.1
     efficiency_state: str | None  # shock 활성 시 "shock"
     efficiency_duration: int | None
     volatility_state: str | None
@@ -77,8 +88,13 @@ class TfAnalysis:
     zigzag: ZigzagResult
     broken: frozenset[int]
     structure_state: str
+    high_relation: str | None  # A.3.3
+    low_relation: str | None
+    last_break: Break | None  # A.3.4
     retracement: Retracement | None
+    retracement_tentative: float | None  # A.3.5 진행 파동 기준 깊이
     tentative_distance_atr: float | None
+    flow: FlowResult  # A.12
     candles: tuple[CandleRow, ...]  # 최근 K개 마감 봉, 시간순
     events: tuple[ev.Event, ...]
 
@@ -87,8 +103,9 @@ class TfAnalysis:
 class DerivativesResult:
     premium: deriv.PremiumResult
     metrics_ts: int | None  # ts <= ref_time인 가장 최근 metrics 행
-    quadrants: tuple[deriv.QuadrantPoint, ...]  # 기간별 현재 4분면
+    quadrants: tuple[deriv.QuadrantState, ...]  # 기간별 4분면 (A.5.1)
     metric_values: tuple[LatestMetric, ...]
+    ratios: tuple[deriv.RatioValue, ...]  # A.5.4
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +117,7 @@ class Analysis:
     timeframes: tuple[TfAnalysis, ...]  # indicators.timeframes 순서
     window: WindowStats
     levels: LevelsResult
+    touches: dict[str, TouchStats]  # level_id → 터치 횟수 (A.7.5)
     derivatives: DerivativesResult
     events: tuple[ev.Event, ...]  # 전체 이벤트, bar_time 순
 
@@ -135,8 +153,8 @@ def load_input(conn: sqlite3.Connection, config: Config, until_ms: int | None = 
     ref_time = klines[-1].open_time + MINUTE_MS
     premium_start = premium_load_start(config, ref_time)
     premium = query.premium_between(conn, symbol, premium_start, ref_time)
-    metrics = query.metrics_between(conn, symbol, metrics_load_start(config, ref_time), ref_time)
     latest = query.latest_metrics(conn, symbol, ref_time)
+    metrics = query.metrics_between(conn, symbol, metrics_load_start(config, ref_time, latest), ref_time)
     return ComputeInput(
         symbol, anchor, ref_time, tuple(klines), tuple(premium), premium_start, tuple(metrics), tuple(latest)
     )
@@ -149,14 +167,24 @@ def premium_load_start(config: Config, ref_time: int) -> int:
     bars = p.pct_lookback + config.events.report_bars[p.smoothing_tf] + 1
     start = (ref_time // tf_ms - bars) * tf_ms
     longest = max((parse_tf(w) for w in p.windows), default=0)
-    return min(start, (ref_time - longest - MINUTE_MS) // tf_ms * tf_ms)
+    current = ref_time - (p.current_pct_lookback + 1) * MINUTE_MS  # 현재값 백분위 표본 (A.5.2)
+    return min(start, (ref_time - longest - MINUTE_MS) // tf_ms * tf_ms, current // tf_ms * tf_ms)
 
 
-def metrics_load_start(config: Config, ref_time: int) -> int:
-    longest = max((parse_tf(p) for p in config.derivatives.quadrant.periods), default=0)
+def quadrant_eval_start(config: Config, ref_time: int) -> int:
+    """확정 상태 계산의 첫 스냅샷: 기준 시각 전 `2 × report_minutes` (A.5.1)."""
     report = config.events.quadrant_change.report_minutes * MINUTE_MS
-    # 보고 기간과, 그 앞에서 직전 확정 4분면을 찾는 같은 길이의 구간(A.8.3), 각 시각의 기간 P 비교값.
-    return ref_time - (2 * report + longest + METRICS_STEP_MS)
+    return (ref_time - 2 * report) // METRICS_STEP_MS * METRICS_STEP_MS + METRICS_STEP_MS
+
+
+def metrics_load_start(config: Config, ref_time: int, latest: Sequence[LatestMetric]) -> int:
+    """4분면(불감대 표본 + 기간 P 비교값)과 비율 백분위 표본을 모두 덮는 시작 시각."""
+    q = config.derivatives.quadrant
+    longest = max((parse_tf(p) for p in q.periods), default=0)
+    quadrant = quadrant_eval_start(config, ref_time) - (q.band_lookback - 1) * METRICS_STEP_MS - longest
+    ratio_ends = [m.ts for m in latest if m.ts is not None] or [ref_time]
+    ratios = min(ratio_ends) - (config.derivatives.ratios.pct_lookback - 1) * METRICS_STEP_MS
+    return min(quadrant, ratios)
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +204,13 @@ def analyze(inp: ComputeInput, config: Config) -> Analysis:
         [(tf, per_tf[tf].zigzag.swings, per_tf[tf].broken) for tf in lv.swing_timeframes], stats, lv.swing_count
     )
     level_result = levels(members, per_tf[lv.normalize_tf].atr.value, ref_price, lv.merge_dist, lv.zone_width, lv.report_each_side)
+    touches: dict[str, TouchStats] = {}
+    if level_result.atr is not None:
+        touch_series = per_tf[lv.touch_tf].series
+        touches = {
+            level.level_id: touch_stats(level, touch_series, lv.zone_width, level_result.atr)
+            for level in level_result.reported
+        }
 
     events: list[ev.Event] = []
     results = []
@@ -196,7 +231,8 @@ def analyze(inp: ComputeInput, config: Config) -> Analysis:
     events += deriv_events
     events.sort(key=lambda e: (e.bar_time, e.tf, e.type))
     return Analysis(
-        inp.symbol, inp.anchor_ms, inp.ref_time, ref_price, tuple(results), stats, level_result, derivatives, tuple(events)
+        inp.symbol, inp.anchor_ms, inp.ref_time, ref_price, tuple(results), stats, level_result, touches, derivatives,
+        tuple(events),
     )
 
 
@@ -213,8 +249,10 @@ def _analyze_tf(series: BarSeries, config: Config, ref_price: float) -> TfAnalys
     ]
     zz = zigzag(series, atr_values, ind.zigzag.k)
     st = analyze_structure(
-        series, zz.swings, atr_values, ind.structure.displacement_mult, ind.structure.displacement_lookback
+        series, zz.swings, atr_values, ind.structure.displacement_mult, ind.structure.displacement_lookback,
+        ind.structure.equal_tol_atr,
     )
+    final_state = structure_state(zz.swings, atr_values, ind.structure.equal_tol_atr)
     is_shock_tf = series.tf in reg.shock.timeframes
     sh = shock(candles, st.breaks, reg) if is_shock_tf else None
     eff = [
@@ -254,6 +292,7 @@ def _analyze_tf(series: BarSeries, config: Config, ref_price: float) -> TfAnalys
         parkinson=measure(series, last, p_n, park[last] if last >= 0 else None),
         parkinson_pct=measure(series, last, p_n + ind.parkinson.pct_lookback - 1, pct[last] if last >= 0 else None),
         er=measure(series, last, reg.er.n + 1, er[last] if last >= 0 else None),
+        er_direction=er_direction(bars, last, reg.er.n, er[last]) if last >= 0 else None,
         efficiency_state=eff[last] if last >= 0 else None,
         efficiency_duration=duration(eff, last),
         volatility_state=vol[last] if last >= 0 else None,
@@ -262,8 +301,13 @@ def _analyze_tf(series: BarSeries, config: Config, ref_price: float) -> TfAnalys
         zigzag=zz,
         broken=st.broken,
         structure_state=st.states[last] if last >= 0 else "insufficient",
+        high_relation=final_state.high_relation,
+        low_relation=final_state.low_relation,
+        last_break=st.breaks[-1] if st.breaks else None,
         retracement=retracement(zz.swings, ref_price, last) if last >= 0 else None,
+        retracement_tentative=retracement_tentative(zz.swings, zz.tentative, ref_price),
         tentative_distance_atr=tentative,
+        flow=flow(series, ind.flow.ema_n, ind.flow.pct_lookback),
         candles=candle_rows,
         events=tuple(tf_events),
     )
@@ -287,7 +331,10 @@ def _derivatives(inp: ComputeInput, config: Config) -> tuple[DerivativesResult, 
     d = config.derivatives
     windows = [(w, parse_tf(w)) for w in d.premium.windows]
     smoothing_ms = parse_tf(d.premium.smoothing_tf)
-    prem = deriv.premium(inp.premium, inp.ref_time, windows, smoothing_ms, d.premium.pct_lookback, inp.premium_start)
+    prem = deriv.premium(
+        inp.premium, inp.ref_time, windows, smoothing_ms, d.premium.pct_lookback, inp.premium_start,
+        d.premium.current_pct_lookback, d.premium.min_coverage,
+    )
 
     events: list[ev.Event] = []
     smoothed = prem.smoothed
@@ -315,48 +362,26 @@ def _derivatives(inp: ComputeInput, config: Config) -> tuple[DerivativesResult, 
     oi_by_ts = {r.ts: r.sum_open_interest for r in rows}
     close_by_open = {k.open_time: k.close for k in inp.klines}
     q = d.quadrant
-    periods = [(p, parse_tf(p)) for p in q.periods]
     latest_ts = rows[-1].ts if rows else None
-    current: list[deriv.QuadrantPoint] = []
-    if latest_ts is not None:
-        current = [deriv.quadrant_at(latest_ts, p, ms, oi_by_ts, close_by_open, q.oi_band, q.px_band) for p, ms in periods]
+    states: list[deriv.QuadrantState] = []
+    first_ts = quadrant_eval_start(config, inp.ref_time)
+    if latest_ts is not None and latest_ts >= first_ts:
         report_ms = config.events.quadrant_change.report_minutes * MINUTE_MS
-        for p, ms in periods:
-            events += _quadrant_changes(
-                p, ms, oi_by_ts, close_by_open, q.oi_band, q.px_band, inp.ref_time, latest_ts, report_ms
+        for period in q.periods:
+            points = deriv.quadrant_series(
+                parse_tf(period), oi_by_ts, close_by_open, first_ts, latest_ts, METRICS_STEP_MS,
+                q.band_lookback, q.band_pct, q.min_coverage,
             )
-    result = DerivativesResult(prem, latest_ts, tuple(current), inp.latest_metrics)
+            state = deriv.confirm(period, points, q.confirm_snapshots)
+            states.append(state)
+            for ts, before, after, point in state.changes:
+                if inp.ref_time - ts < report_ms:
+                    events.append(
+                        ev.Event(
+                            "quadrant_change", ev.DERIVATIVES, "5m", ts, (latest_ts - ts) // METRICS_STEP_MS,
+                            ev.QuadrantChangeMeasures(period, before, after, point.d_oi, point.d_px),
+                        )
+                    )
+    ratios = deriv.ratio_values(rows, inp.latest_metrics, METRICS_STEP_MS, d.ratios.pct_lookback, d.ratios.min_coverage)
+    result = DerivativesResult(prem, latest_ts, tuple(states), inp.latest_metrics, ratios)
     return result, events
-
-
-def _quadrant_changes(
-    period: str,
-    period_ms: int,
-    oi_by_ts: dict[int, float | None],
-    close_by_open: dict[int, float],
-    oi_band: float,
-    px_band: float,
-    ref_time: int,
-    latest_ts: int,
-    report_ms: int,
-) -> list[ev.Event]:
-    """A.8.3: 확정 4분면이 직전 확정 4분면과 다를 때만 낸다. `indeterminate`와 `null`은 건너뛴다.
-
-    직전 확정 4분면은 보고 기간 앞의 같은 길이 구간에서부터 찾는다.
-    """
-    events: list[ev.Event] = []
-    first = (ref_time - 2 * report_ms) // METRICS_STEP_MS * METRICS_STEP_MS + METRICS_STEP_MS
-    last_determinate: str | None = None
-    for ts in range(first, latest_ts + 1, METRICS_STEP_MS):
-        point = deriv.quadrant_at(ts, period, period_ms, oi_by_ts, close_by_open, oi_band, px_band)
-        if point.quadrant is None or point.quadrant == deriv.INDETERMINATE:
-            continue
-        if last_determinate is not None and point.quadrant != last_determinate and ref_time - ts < report_ms:
-            events.append(
-                ev.Event(
-                    "quadrant_change", ev.DERIVATIVES, "5m", ts, (latest_ts - ts) // METRICS_STEP_MS,
-                    ev.QuadrantChangeMeasures(period, last_determinate, point.quadrant, point.d_oi, point.d_px),
-                )
-            )
-        last_determinate = point.quadrant
-    return events

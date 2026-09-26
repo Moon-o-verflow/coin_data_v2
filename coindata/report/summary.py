@@ -16,7 +16,8 @@ from typing import Any
 
 from coindata.compute import events as ev
 from coindata.compute.engine import Analysis, TfAnalysis
-from coindata.compute.levels import Level
+from coindata.compute.flow import FlowResult
+from coindata.compute.levels import Level, TouchStats, distance_bp
 from coindata.compute.series import Measured
 from coindata.config import Config, ReportConfig
 from coindata.models import (
@@ -24,25 +25,23 @@ from coindata.models import (
     Dataset,
     FundingInfo,
     Kline,
-    LatestMetric,
     OpenGap,
     SummaryRecord,
     SummaryTrigger,
 )
 
-SUMMARY_SCHEMA_VERSION = "1"
+SUMMARY_SCHEMA_VERSION = "2"
 NOT_AVAILABLE_AT_REF_TIME = "not_available_at_ref_time"
 REST_FAILED = "rest_failed"
-ABSENT_BAR = "absent_bar"
+PREVIOUS_PARAMS_UNAVAILABLE = "previous_params_unavailable"
 BP = 10_000
 PERCENT = 100
 
 UNAVAILABLE: tuple[tuple[str, str], ...] = (
     ("liquidation", "source_unavailable"),
-    ("trade_based_indicators", "not_implemented"),
+    ("trade_size_distribution", "not_implemented"),
     ("statistics", "not_implemented"),
 )
-RATIO_FIELDS = ("top_position_ratio", "top_account_ratio", "global_account_ratio", "taker_buy_sell_ratio")
 
 # 이벤트 측정값의 자릿수 종류. 여기에 없는 실수는 비율 자릿수를 쓴다.
 _MEASURE_KIND = {"price": "price", "swing_price": "price", "level_center": "price", "value_bp": "bp", "pct": "pct"}
@@ -74,6 +73,7 @@ class SummaryContext:
     failures: tuple[str, ...]  # 이번 실행의 취득 실패
     gaps: tuple[OpenGap, ...]
     previous: SummaryRecord | None
+    full_params: bool  # --full-params
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +81,7 @@ class BuiltSummary:
     document: dict[str, Any]
     state_json: str
     params_hash: str
+    params_json: str  # summary_log.params (FR-4.1 params_diff)
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +103,10 @@ def summary_id_of(ms: int) -> str:
 
 class _Fmt:
     def __init__(self, report: ReportConfig) -> None:
-        self._digits = {"price": report.digits_price, "ratio": report.digits_ratio, "bp": report.digits_bp, "pct": report.digits_pct}
+        self._digits = {
+            "price": report.digits_price, "ratio": report.digits_ratio, "bp": report.digits_bp,
+            "pct": report.digits_pct, "volume": report.digits_volume,
+        }
 
     def num(self, value: float | None, kind: str) -> float | None:
         return None if value is None else round(value, self._digits[kind])
@@ -118,6 +122,9 @@ class _Fmt:
 
     def pct(self, value: float | None) -> float | None:
         return self.num(value, "pct")
+
+    def volume(self, value: float | None) -> float | None:
+        return self.num(value, "volume")
 
     def measured(self, m: Measured, kind: str, scale: float = 1.0) -> dict[str, Any]:
         value = None if m.value is None else m.value * scale
@@ -157,8 +164,28 @@ def current_state(analysis: Analysis) -> dict[str, Any]:
             }
             for tf in analysis.timeframes
         },
-        "quadrant": {q.period: q.quadrant for q in analysis.derivatives.quadrants},
+        "quadrant": {q.period: q.confirmed for q in analysis.derivatives.quadrants},
     }
+
+
+def _flatten(node: Any, prefix: str = "") -> dict[str, Any]:
+    if isinstance(node, dict):
+        out: dict[str, Any] = {}
+        for key, value in node.items():
+            out |= _flatten(value, f"{prefix}{key}.")
+        return out
+    return {prefix[:-1]: node}
+
+
+def params_diff(previous: Mapping[str, Any], current: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """FR-4.1: 바뀐 파라미터 키의 이전 값과 새 값. 한쪽에만 있는 키는 없는 쪽을 null로 싣는다."""
+    # 저장된 원문은 JSON이므로 튜플이 리스트로 돌아온다. 같은 표현으로 맞춰 비교한다.
+    before, after = _flatten(json.loads(json.dumps(previous))), _flatten(json.loads(json.dumps(current)))
+    return [
+        {"key": key, "from": before.get(key), "to": after.get(key)}
+        for key in sorted(set(before) | set(after))
+        if before.get(key) != after.get(key)
+    ]
 
 
 def state_changes(previous: Mapping[str, Any], current: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -193,7 +220,8 @@ def build_summary(ctx: SummaryContext) -> BuiltSummary:
         "data_freshness": _freshness(ctx),
         "price_structure": {"timeframes": [_price_structure(tf, a.ref_price, ctx.config, f) for tf in a.timeframes]},
         "regime": {"timeframes": [_regime(tf, f) for tf in a.timeframes]},
-        "derivatives": _derivatives(a, f),
+        "derivatives": _derivatives(ctx, f),
+        "flow": {"timeframes": [_flow(tf.tf, tf.flow, f) for tf in a.timeframes]},
         "funding": _funding(ctx, historical, f),
         "levels": _levels(a, ctx.config, f),
         "events": [_event(e, f) for e in a.events],
@@ -206,10 +234,14 @@ def build_summary(ctx: SummaryContext) -> BuiltSummary:
         "unavailable": [{"item": item, "reason": reason} for item, reason in UNAVAILABLE],
     }
     state_json = json.dumps(state, sort_keys=True, ensure_ascii=False)
-    return BuiltSummary(document, state_json, hashed)
+    params_json = json.dumps(params, sort_keys=True, ensure_ascii=False)
+    return BuiltSummary(document, state_json, hashed, params_json)
 
 
-def serialize(document: Mapping[str, Any]) -> str:
+def serialize(document: Mapping[str, Any], compact: bool = False) -> str:
+    """`compact`면 들여쓰기 없이 한 줄로 쓴다(`--compact`)."""
+    if compact:
+        return json.dumps(document, ensure_ascii=False, separators=(",", ":")) + "\n"
     return json.dumps(document, ensure_ascii=False, indent=2) + "\n"
 
 
@@ -243,8 +275,23 @@ def _meta(ctx: SummaryContext, f: _Fmt, params: Mapping[str, Any], hashed: str) 
         "anchor_time": format_time(a.anchor_ms),
         "historical": historical,
         "params_hash": hashed,
-        "params": params,
+        **_params_fields(ctx, params, hashed),
     }
+
+
+def _params_fields(ctx: SummaryContext, params: Mapping[str, Any], hashed: str) -> dict[str, Any]:
+    """FR-4.1: 기본은 해시만. 직전 요약과 해시가 다르면 변경분, `--full-params`면 전체."""
+    fields: dict[str, Any] = {}
+    prev = ctx.previous
+    if prev is not None and prev.params_hash != hashed:
+        if prev.params is None:
+            fields["params_diff"] = None
+            fields["params_diff_null_reason"] = PREVIOUS_PARAMS_UNAVAILABLE
+        else:
+            fields["params_diff"] = params_diff(json.loads(prev.params), params)
+    if ctx.full_params:
+        fields["params"] = params
+    return fields
 
 
 def _freshness(ctx: SummaryContext) -> dict[str, Any]:
@@ -290,9 +337,18 @@ def _price_structure(tf: TfAnalysis, ref_price: float, config: Config, f: _Fmt) 
         tentative = {
             "dir": t.dir,
             "price": f.price(t.price),
+            "distance_bp": f.bp(distance_bp(t.price, ref_price)),
             "bar_time": format_time(series.open_time(t.bar_index)),
             "distance_atr": f.ratio(tf.tentative_distance_atr),
         }
+    brk = tf.last_break
+    last_break = None if brk is None else {
+        "side": brk.side,
+        "break_kind": brk.break_kind,
+        "swing_price": f.price(brk.swing.price),
+        "bar_time": format_time(series.open_time(brk.bar_index)),
+        "bars_ago": tf.last_index - brk.bar_index,
+    }
     forming = series.forming
     last_bar = series.bars[tf.last_index] if tf.last_index >= 0 else None
     return {
@@ -307,10 +363,14 @@ def _price_structure(tf: TfAnalysis, ref_price: float, config: Config, f: _Fmt) 
         },
         "atr": f.measured(tf.atr, "price"),
         "structure_state": tf.structure_state,
+        "high_relation": tf.high_relation,
+        "low_relation": tf.low_relation,
+        "last_break": last_break,
         "swings": [
             {
                 "type": s.type,
                 "price": f.price(s.price),
+                "distance_bp": f.bp(distance_bp(s.price, ref_price)),
                 "bar_time": format_time(series.open_time(s.bar_index)),
                 "extreme_time": format_time(s.extreme_time),
                 "confirmed_time": format_time(series.open_time(s.confirmed_index)),
@@ -324,6 +384,11 @@ def _price_structure(tf: TfAnalysis, ref_price: float, config: Config, f: _Fmt) 
         "retracement": None if tf.retracement is None else {
             "depth": f.ratio(tf.retracement.depth),
             "time_ratio": f.ratio(tf.retracement.time_ratio),
+            "basis": "ref_price",
+        },
+        "retracement_tentative": None if tf.retracement_tentative is None else {
+            "depth": f.ratio(tf.retracement_tentative),
+            "basis": "ref_price",
         },
         "candles": [_candle(row, f) for row in tf.candles],
     }
@@ -332,16 +397,17 @@ def _price_structure(tf: TfAnalysis, ref_price: float, config: Config, f: _Fmt) 
 def _candle(row: Any, f: _Fmt) -> dict[str, Any]:
     c = row.candle
     if c is None:
-        return {"bar_time": format_time(row.bar_time), "missing_ratio": f.ratio(row.missing_ratio), "null_reason": ABSENT_BAR}
+        return {"bar_time": format_time(row.bar_time), "absent": True}
     return {
         "bar_time": format_time(row.bar_time),
+        "absent": False,
         "missing_ratio": f.ratio(row.missing_ratio),
+        "close_vs_open": c.close_vs_open,
         "upper_wick_ratio": f.ratio(c.upper_wick_ratio),
         "lower_wick_ratio": f.ratio(c.lower_wick_ratio),
         "body_ratio": f.ratio(c.body_ratio),
         "body_atr": f.ratio(c.body_atr),
         "range_atr": f.ratio(c.range_atr),
-        "null_reason": None,
         "ratio_null_reason": row.ratio_null_reason,
         "atr_null_reason": row.atr_null_reason,
     }
@@ -353,6 +419,7 @@ def _regime(tf: TfAnalysis, f: _Fmt) -> dict[str, Any]:
         "efficiency_state": tf.efficiency_state,
         "efficiency_duration_bars": tf.efficiency_duration,
         "er": f.measured(tf.er, "ratio"),
+        "er_direction": tf.er_direction,
         "volatility_state": tf.volatility_state,
         "volatility_duration_bars": tf.volatility_duration,
         "parkinson_bp": f.measured(tf.parkinson, "bp", BP),
@@ -361,16 +428,27 @@ def _regime(tf: TfAnalysis, f: _Fmt) -> dict[str, Any]:
     }
 
 
-def _derivatives(a: Analysis, f: _Fmt) -> dict[str, Any]:
-    d = a.derivatives
+def _possibly_unpublished(ctx: SummaryContext, field: str, ts: int | None) -> bool:
+    """FR-4.8: 과거 시점 요약에서 `ts > ref_time − lag`인 metrics 값. 현재 시점 요약은 항상 False."""
+    if ctx.trigger is not SummaryTrigger.HISTORICAL or ts is None:
+        return False
+    lag = ctx.config.historical.publication_lag_minutes.get(field, 0) * MINUTE_MS
+    return ts > ctx.analysis.ref_time - lag
+
+
+def _derivatives(ctx: SummaryContext, f: _Fmt) -> dict[str, Any]:
+    d = ctx.analysis.derivatives
     p = d.premium
     smoothed = p.smoothed[-1] if p.smoothed else None
     latest = {m.field: m for m in d.metric_values}
-    oi = latest.get("sum_open_interest", LatestMetric("sum_open_interest", None, None))
+    oi = latest.get("sum_open_interest")
+    oi_value, oi_ts = (oi.value, oi.ts) if oi is not None else (None, None)
     return {
         "premium_index": {
             "current_bp": f.bp(p.current_bp),
             "bar_time": format_time(p.current_time),
+            "current_pct": f.pct(p.current_pct),
+            "current_pct_null_reason": p.current_pct_null_reason,
             "changes": [{"window": c.window, "change_bp": f.bp(c.change_bp), "null_reason": c.null_reason} for c in p.changes],
             "smoothed": None if smoothed is None else {
                 "bar_time": format_time(smoothed.open_time),
@@ -381,25 +459,59 @@ def _derivatives(a: Analysis, f: _Fmt) -> dict[str, Any]:
             },
         },
         "open_interest": {
-            "contracts": f.price(oi.value),
-            "ts": format_time(oi.ts),
+            "contracts": f.price(oi_value),
+            "ts": format_time(oi_ts),
+            "possibly_unpublished_at_ref_time": _possibly_unpublished(ctx, "sum_open_interest", oi_ts),
             "quadrant_ts": format_time(d.metrics_ts),
-            "quadrants": [
-                {
-                    "period": q.period,
-                    "quadrant": q.quadrant,
-                    "d_oi_percent": f.ratio(None if q.d_oi is None else q.d_oi * PERCENT),
-                    "d_px_percent": f.ratio(None if q.d_px is None else q.d_px * PERCENT),
-                    "null_reason": q.null_reason,
-                }
-                for q in d.quadrants
-            ],
+            "quadrants": [_quadrant(q, f) for q in d.quadrants],
         },
         "ratios": [
-            {"field": name, "value": f.ratio(latest[name].value if name in latest else None),
-             "ts": format_time(latest[name].ts if name in latest else None)}
-            for name in RATIO_FIELDS
+            {
+                "field": r.field,
+                "value": f.ratio(r.value),
+                "ts": format_time(r.ts),
+                "pct": f.pct(r.pct),
+                "sample_n": r.sample_n,
+                "null_reason": r.null_reason,
+                "possibly_unpublished_at_ref_time": _possibly_unpublished(ctx, r.field, r.ts),
+            }
+            for r in d.ratios
         ],
+    }
+
+
+def _quadrant(q: Any, f: _Fmt) -> dict[str, Any]:
+    point = q.point
+
+    def percent(x: float | None) -> float | None:
+        return f.ratio(None if x is None else x * PERCENT)
+
+    return {
+        "period": q.period,
+        "quadrant_confirmed": q.confirmed,
+        "quadrant_raw": point.raw,
+        "confirmed_since": format_time(q.confirmed_since),
+        "duration_snapshots": q.duration_snapshots,
+        "duration_capped": q.duration_capped,
+        "d_oi_percent": percent(point.d_oi),
+        "d_px_percent": percent(point.d_px),
+        "band_oi_percent": percent(point.band_oi),
+        "band_px_percent": percent(point.band_px),
+        "null_reason": point.null_reason,
+    }
+
+
+def _flow(tf: str, fl: FlowResult, f: _Fmt) -> dict[str, Any]:
+    """A.12. taker 체결량은 1분봉 기준이며 전체 거래량이 아니다(D-7)."""
+    return {
+        "tf": tf,
+        "bar_time": format_time(fl.bar_time),
+        "taker_buy": f.volume(fl.taker_buy),
+        "taker_sell": f.volume(fl.taker_sell),
+        "delta": f.volume(fl.delta),
+        "imbalance": f.measured(fl.imbalance, "ratio"),
+        "imbalance_pct": f.measured(fl.imbalance_pct, "pct"),
+        "delta_ema": f.measured(fl.delta_ema, "volume"),
     }
 
 
@@ -428,14 +540,19 @@ def _levels(a: Analysis, config: Config, f: _Fmt) -> dict[str, Any]:
     }
     if a.levels.atr is None:
         return base | {"levels": None, "null_reason": "normalize_atr_unavailable"}
-    return base | {"levels": [_level(lv, f) for lv in a.levels.reported], "null_reason": None}
+    levels = [_level(lv, a.touches.get(lv.level_id), a.ref_price, f) for lv in a.levels.reported]
+    return base | {"levels": levels, "null_reason": None}
 
 
-def _level(lv: Level, f: _Fmt) -> dict[str, Any]:
+def _level(lv: Level, touches: TouchStats | None, ref_price: float, f: _Fmt) -> dict[str, Any]:
     return {
+        "level_id": lv.level_id,
         "center": f.price(lv.center),
+        "center_distance_bp": f.bp(distance_bp(lv.center, ref_price)),
         "zone_low": f.price(lv.zone_low),
+        "zone_low_distance_bp": f.bp(distance_bp(lv.zone_low, ref_price)),
         "zone_high": f.price(lv.zone_high),
+        "zone_high_distance_bp": f.bp(distance_bp(lv.zone_high, ref_price)),
         "distance_atr": f.ratio(lv.distance_atr),
         "position": lv.position,
         "sources": list(lv.sources),
@@ -444,6 +561,10 @@ def _level(lv: Level, f: _Fmt) -> dict[str, Any]:
             {"source": m.source, "price": f.price(m.price), "broken": m.broken}
             for m in lv.members
         ],
+        "touch_count": touches.touch_count if touches else None,
+        "last_touch_bars_ago": touches.last_touch_bars_ago if touches else None,
+        "touch_absent_bars": touches.absent_bars if touches else None,
+        "touch_null_reason": touches.null_reason if touches else None,
     }
 
 

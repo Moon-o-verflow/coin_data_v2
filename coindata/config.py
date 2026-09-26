@@ -108,6 +108,13 @@ class ZigzagConfig:
 class StructureConfig:
     displacement_mult: float = 1.5
     displacement_lookback: int = 20
+    equal_tol_atr: float = 0.1  # A.3.3
+
+
+@dataclass(frozen=True, slots=True)
+class FlowConfig:
+    ema_n: int = 15  # A.12
+    pct_lookback: int = 100
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +125,7 @@ class IndicatorsConfig:
     candle: CandleConfig = field(default_factory=CandleConfig)
     zigzag: ZigzagConfig = field(default_factory=ZigzagConfig)
     structure: StructureConfig = field(default_factory=StructureConfig)
+    flow: FlowConfig = field(default_factory=FlowConfig)
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,8 +160,10 @@ class RegimeConfig:
 @dataclass(frozen=True, slots=True)
 class QuadrantConfig:
     periods: tuple[str, ...] = ("1h", "4h")
-    oi_band: float = 0.001
-    px_band: float = 0.001
+    band_lookback: int = 2016  # A.5.1, 5분 스냅샷 수(7일)
+    band_pct: float = 30.0
+    confirm_snapshots: int = 3
+    min_coverage: float = 0.9
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,12 +171,21 @@ class PremiumConfig:
     windows: tuple[str, ...] = ("15m", "1h", "4h")
     smoothing_tf: str = "15m"
     pct_lookback: int = 672
+    current_pct_lookback: int = 10080  # A.5.2, 1분 값 수(7일)
+    min_coverage: float = 0.9
+
+
+@dataclass(frozen=True, slots=True)
+class RatiosConfig:
+    pct_lookback: int = 2016  # A.5.4, 5분 값 수(7일)
+    min_coverage: float = 0.9
 
 
 @dataclass(frozen=True, slots=True)
 class DerivativesConfig:
     quadrant: QuadrantConfig = field(default_factory=QuadrantConfig)
     premium: PremiumConfig = field(default_factory=PremiumConfig)
+    ratios: RatiosConfig = field(default_factory=RatiosConfig)
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,6 +198,7 @@ class LevelsConfig:
     merge_dist: float = 0.5
     zone_width: float = 0.25
     report_each_side: int = 5
+    touch_tf: str = "15m"  # A.7.5
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,6 +252,24 @@ class ReportConfig:
     digits_ratio: int = 3
     digits_bp: int = 2
     digits_pct: int = 1
+    digits_volume: int = 3
+
+
+def _default_publication_lag() -> dict[str, int]:
+    return {
+        "sum_open_interest": 5,
+        "sum_open_interest_value": 5,
+        "top_position_ratio": 5,
+        "top_account_ratio": 5,
+        "global_account_ratio": 5,
+        "taker_buy_sell_ratio": 10,
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class HistoricalConfig:
+    # FR-4.8: 과거 시점 요약에서 공개 지연 가능성을 표시할 필드별 지연(분).
+    publication_lag_minutes: dict[str, int] = field(default_factory=_default_publication_lag)
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,6 +283,7 @@ class Config:
     events: EventsConfig = field(default_factory=EventsConfig)
     compute: ComputeConfig = field(default_factory=ComputeConfig)
     report: ReportConfig = field(default_factory=ReportConfig)
+    historical: HistoricalConfig = field(default_factory=HistoricalConfig)
 
 
 # ---------------------------------------------------------------------------
@@ -355,10 +394,11 @@ def _validate(config: Config) -> None:
         except ValueError:
             problems.append("compute.anchor_time: 빈 문자열 또는 YYYY-MM-DD여야 한다")
     problems += _validate_timeframes(config)
+    problems += _validate_windows(config)
     report = config.report
     if min(report.swings_per_tf, report.stale_minutes_bars, report.stale_minutes_metrics) < 1:
         problems.append("report.swings_per_tf, stale_minutes_*: 1 이상이어야 한다")
-    if min(report.digits_price, report.digits_ratio, report.digits_bp, report.digits_pct) < 0:
+    if min(report.digits_price, report.digits_ratio, report.digits_bp, report.digits_pct, report.digits_volume) < 0:
         problems.append("report.digits_*: 0 이상이어야 한다")
     if problems:
         raise ConfigError("; ".join(problems))
@@ -382,6 +422,7 @@ def _validate_timeframes(config: Config) -> list[str]:
         "events.volume_spike.timeframes": config.events.volume_spike.timeframes,
         "levels.swing_timeframes": config.levels.swing_timeframes,
         "levels.normalize_tf": (config.levels.normalize_tf,),
+        "levels.touch_tf": (config.levels.touch_tf,),
         "derivatives.quadrant.periods": config.derivatives.quadrant.periods,
         "derivatives.premium.windows": config.derivatives.premium.windows,
         "derivatives.premium.smoothing_tf": (config.derivatives.premium.smoothing_tf,),
@@ -397,6 +438,7 @@ def _validate_timeframes(config: Config) -> list[str]:
         "events.volume_spike.timeframes",
         "levels.swing_timeframes",
         "levels.normalize_tf",
+        "levels.touch_tf",
     ):
         outside = [tf for tf in groups[key] if tf not in timeframes]
         if outside:
@@ -405,4 +447,34 @@ def _validate_timeframes(config: Config) -> list[str]:
     missing = sorted(needed - set(config.events.report_bars))
     if missing:
         problems.append(f"events.report_bars: 보고 기간이 없는 TF: {', '.join(missing)}")
+    return problems
+
+
+def _validate_windows(config: Config) -> list[str]:
+    """룩백·백분위·채움률 설정의 범위."""
+    problems: list[str] = []
+    q, p, r = config.derivatives.quadrant, config.derivatives.premium, config.derivatives.ratios
+    for key, value in (
+        ("derivatives.quadrant.min_coverage", q.min_coverage),
+        ("derivatives.premium.min_coverage", p.min_coverage),
+        ("derivatives.ratios.min_coverage", r.min_coverage),
+    ):
+        if not 0 < value <= 1:
+            problems.append(f"{key}: 0보다 크고 1 이하여야 한다")
+    if not 0 <= q.band_pct <= 100:
+        problems.append("derivatives.quadrant.band_pct: 0 이상 100 이하여야 한다")
+    for key, value in (
+        ("derivatives.quadrant.band_lookback", q.band_lookback),
+        ("derivatives.quadrant.confirm_snapshots", q.confirm_snapshots),
+        ("derivatives.premium.current_pct_lookback", p.current_pct_lookback),
+        ("derivatives.ratios.pct_lookback", r.pct_lookback),
+        ("indicators.flow.ema_n", config.indicators.flow.ema_n),
+        ("indicators.flow.pct_lookback", config.indicators.flow.pct_lookback),
+    ):
+        if value < 1:
+            problems.append(f"{key}: 1 이상이어야 한다")
+    if config.indicators.structure.equal_tol_atr < 0:
+        problems.append("indicators.structure.equal_tol_atr: 0 이상이어야 한다")
+    if any(v < 0 for v in config.historical.publication_lag_minutes.values()):
+        problems.append("historical.publication_lag_minutes: 0 이상이어야 한다")
     return problems

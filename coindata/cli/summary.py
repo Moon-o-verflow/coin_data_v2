@@ -66,6 +66,8 @@ def run_summary(
     sleeper: Sleeper,
     clients: tuple[ArchiveClient, BinanceRestClient] | None,
     at_ms: int | None,
+    full_params: bool,
+    compact: bool,
 ) -> SummaryResult:
     """`at_ms`가 None이면 현재 시점 요약이며 `clients`가 필요하다."""
     symbol = config.data.symbol
@@ -111,9 +113,12 @@ def run_summary(
         failures=failures,
         gaps=tuple(query.gaps_overlapping(conn, symbol, analysis.anchor_ms, analysis.ref_time - 1)),
         previous=query.previous_summary(conn, trigger, analysis.ref_time),
+        full_params=full_params,
     )
     built = build_summary(ctx)
-    path = save_summary(conn, output_dir, built, summary_id, created_at, trigger, analysis.ref_time, analysis.ref_price)
+    path = save_summary(
+        conn, output_dir, built, summary_id, created_at, trigger, analysis.ref_time, analysis.ref_price, compact
+    )
     return SummaryResult(path, summary_id, bool(failures), failures)
 
 

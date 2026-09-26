@@ -88,6 +88,15 @@ class Candle:
     body_ratio: float | None
     body_atr: float | None
     range_atr: float | None
+    close_vs_open: str  # above / below / equal
+
+
+def close_vs_open(bar: Bar) -> str:
+    if bar.close > bar.open:
+        return "above"
+    if bar.close < bar.open:
+        return "below"
+    return "equal"
 
 
 def candle(bar: Bar, prev_atr: float | None) -> Candle:
@@ -100,9 +109,20 @@ def candle(bar: Bar, prev_atr: float | None) -> Candle:
         body_ratio: float | None = body / span
     else:
         upper = lower = body_ratio = None
+    direction = close_vs_open(bar)
     if prev_atr:
-        return Candle(upper, lower, body_ratio, body / prev_atr, span / prev_atr)
-    return Candle(upper, lower, body_ratio, None, None)
+        return Candle(upper, lower, body_ratio, body / prev_atr, span / prev_atr, direction)
+    return Candle(upper, lower, body_ratio, None, None, direction)
+
+
+def er_direction(bars: Sequence[Bar | None], index: int, n: int, er_value: float | None) -> str | None:
+    """A.4.1 `er_direction`: `C_t − C_{t−n}`의 부호. ER이 없으면 None."""
+    if er_value is None:
+        return None
+    now, before = bars[index], bars[index - n]
+    assert now is not None and before is not None  # ER이 있으면 창의 봉이 모두 있다
+    change = now.close - before.close
+    return "up" if change > 0 else ("down" if change < 0 else "flat")
 
 
 def trailing_mean(values: Sequence[float | None], end: int, length: int) -> float | None:

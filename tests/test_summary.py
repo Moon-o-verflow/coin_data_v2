@@ -21,7 +21,7 @@ from tests.fakes import FUNDING_RATE, ms
 from tests.test_cli import D21, CliTestCase
 
 SECTIONS = (
-    "meta", "data_freshness", "price_structure", "regime", "derivatives", "funding",
+    "meta", "data_freshness", "price_structure", "regime", "derivatives", "flow", "funding",
     "levels", "events", "state", "statistics", "gaps", "unavailable",
 )
 # CLAUDE.md R-2 금지어 목록
@@ -102,7 +102,26 @@ class LiveSummaryTest(SummaryTestCase):
         self.assertEqual(doc["gaps"]["acquisition_failures"], [])
         self.assertEqual([tf["tf"] for tf in doc["regime"]["timeframes"]], ["15m", "30m", "1h", "1d"])
         self.assertEqual(doc["statistics"], {"status": "not_implemented"})
-        self.assertEqual({u["item"] for u in doc["unavailable"]}, {"liquidation", "trade_based_indicators", "statistics"})
+        self.assertEqual({u["item"] for u in doc["unavailable"]}, {"liquidation", "trade_size_distribution", "statistics"})
+        # 스키마 v2 (CR-2)
+        self.assertEqual(meta["schema_version"], "2")
+        self.assertNotIn("params", meta)
+        self.assertEqual([f["tf"] for f in doc["flow"]["timeframes"]], ["15m", "30m", "1h", "1d"])
+        tf15 = doc["price_structure"]["timeframes"][0]
+        for key in ("high_relation", "low_relation", "last_break", "retracement_tentative"):
+            self.assertIn(key, tf15)
+        self.assertTrue(all("distance_bp" in s for s in tf15["swings"]))
+        self.assertTrue(all("absent" in c and "null_reason" not in c for c in tf15["candles"]))
+        self.assertIn("er_direction", doc["regime"]["timeframes"][0])
+        prem = doc["derivatives"]["premium_index"]
+        self.assertIn("current_pct", prem)
+        quad = doc["derivatives"]["open_interest"]["quadrants"][0]
+        self.assertEqual(set(quad) >= {"quadrant_confirmed", "quadrant_raw", "confirmed_since", "duration_snapshots"}, True)
+        self.assertTrue(all("pct" in r and "sample_n" in r for r in doc["derivatives"]["ratios"]))
+        self.assertFalse(any(r["possibly_unpublished_at_ref_time"] for r in doc["derivatives"]["ratios"]))
+        for level in doc["levels"]["levels"] or []:
+            self.assertTrue(level["level_id"].startswith("lv_"))
+            self.assertIn("touch_count", level)
         self.assertIsNone(doc["state"]["previous"])
         self.assertEqual(self.query("SELECT \"trigger\", summary_id FROM summary_log"), [("manual", meta["summary_id"])])
 
@@ -138,7 +157,18 @@ class LiveSummaryTest(SummaryTestCase):
         _, third = self.summary()
         self.assertTrue(third["state"]["params_changed"])
         self.assertNotEqual(third["meta"]["params_hash"], second["meta"]["params_hash"])
-        self.assertEqual(third["meta"]["params"]["indicators"]["zigzag"]["k"], 3.0)
+        self.assertEqual(third["meta"]["params_diff"], [{"key": "indicators.zigzag.k", "from": 2.0, "to": 3.0}])
+        self.assertNotIn("params_diff", second["meta"])
+        _, full = self.summary("--full-params")
+        self.assertEqual(full["meta"]["params"]["indicators"]["zigzag"]["k"], 3.0)
+
+    def test_compact_output(self) -> None:
+        self.clock.now += 1_000
+        code, output = self.run_cli("summary", "--compact")
+        self.assertEqual(code, EXIT_OK)
+        text = Path(output.strip()).read_text(encoding="utf-8")
+        self.assertEqual(text.count("\n"), 1)
+        self.assertEqual(json.loads(text)["meta"]["schema_version"], "2")
 
 
 class HistoricalSummaryTest(SummaryTestCase):
@@ -158,6 +188,11 @@ class HistoricalSummaryTest(SummaryTestCase):
         self.assertEqual(meta["current_price"]["null_reason"], "not_available_at_ref_time")
         self.assertEqual(doc["funding"]["null_reason"], "not_available_at_ref_time")
         self.assertFalse(doc["data_freshness"]["judged"])
+        # FR-4.8: 기준 시각 직전 공개 지연 구간의 metrics 값은 필드 단위로 표시한다(taker 10분, 나머지 5분).
+        ratios = {r["field"]: r for r in doc["derivatives"]["ratios"]}
+        self.assertEqual(ratios["taker_buy_sell_ratio"]["ts"], "2026-09-23T12:05Z")
+        self.assertTrue(ratios["taker_buy_sell_ratio"]["possibly_unpublished_at_ref_time"])
+        self.assertTrue(doc["derivatives"]["open_interest"]["possibly_unpublished_at_ref_time"])
 
     def test_does_not_read_after_ref_time(self) -> None:
         _, first = self.summary("--at", AT1)

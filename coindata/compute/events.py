@@ -66,6 +66,7 @@ class ShockStartMeasures:
 
 @dataclass(frozen=True, slots=True)
 class LevelWickMeasures:
+    level_id: str
     level_center: float
     penetration_atr: float
     source_count: int
@@ -73,12 +74,14 @@ class LevelWickMeasures:
 
 @dataclass(frozen=True, slots=True)
 class LevelCloseIntoMeasures:
+    level_id: str
     level_center: float
     source_count: int
 
 
 @dataclass(frozen=True, slots=True)
 class LevelCloseThroughMeasures:
+    level_id: str
     level_center: float
     close_beyond_atr: float
     source_count: int
@@ -229,7 +232,7 @@ def level_events(
             if not kept:
                 continue
             lv = build_level(kept, zone_width, atr, ref_price)
-            measures = _level_measures(lv, prev.close, bar.close, bar.high, bar.low, atr)
+            measures = _level_measures(level.level_id, lv, prev.close, bar.close, bar.high, bar.low, atr)
             if measures is not None:
                 name, m = measures
                 events.append(Event(name, LEVEL, series.tf, bar.open_time, last - i, m))
@@ -245,16 +248,16 @@ def _side(price: float, lv: Level) -> str:
 
 
 def _level_measures(
-    lv: Level, prev_close: float, close: float, high: float, low: float, atr: float
+    level_id: str, lv: Level, prev_close: float, close: float, high: float, low: float, atr: float
 ) -> tuple[str, Measures] | None:
     before, after = _side(prev_close, lv), _side(close, lv)
     if before != "inside" and after == "inside":
-        return "level_close_into_zone", LevelCloseIntoMeasures(lv.center, lv.source_count)
+        return "level_close_into_zone", LevelCloseIntoMeasures(level_id, lv.center, lv.source_count)
     if {before, after} == {"below", "above"}:
         beyond = (close - lv.zone_high) if after == "above" else (lv.zone_low - close)
-        return "level_close_through_zone", LevelCloseThroughMeasures(lv.center, beyond / atr, lv.source_count)
+        return "level_close_through_zone", LevelCloseThroughMeasures(level_id, lv.center, beyond / atr, lv.source_count)
     if before == after == "below" and high >= lv.zone_low:
-        return "level_wick_into_zone", LevelWickMeasures(lv.center, (high - lv.zone_low) / atr, lv.source_count)
+        return "level_wick_into_zone", LevelWickMeasures(level_id, lv.center, (high - lv.zone_low) / atr, lv.source_count)
     if before == after == "above" and low <= lv.zone_high:
-        return "level_wick_into_zone", LevelWickMeasures(lv.center, (lv.zone_high - low) / atr, lv.source_count)
+        return "level_wick_into_zone", LevelWickMeasures(level_id, lv.center, (lv.zone_high - low) / atr, lv.source_count)
     return None

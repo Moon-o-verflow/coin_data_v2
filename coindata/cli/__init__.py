@@ -75,6 +75,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--at",
         help="과거 시점 요약. UTC 시각(예: 2026-05-29T12:05Z). 외부 요청 없이 저장소만 읽는다 (FR-4.8)",
     )
+    summary.add_argument("--full-params", action="store_true", help="meta에 전체 파라미터를 싣는다")
+    summary.add_argument("--compact", action="store_true", help="들여쓰기 없이 한 줄로 저장한다")
     commands.add_parser("status", help="저장소 상태를 보여준다 (UF-4)")
     return parser
 
@@ -95,7 +97,7 @@ def main(argv: Sequence[str] | None = None, runtime: Runtime | None = None) -> i
         return _run_status(config, db_path)
     if args.command == "summary":
         output_dir = _resolve_path(base_dir, config.report.output_dir)
-        return _run_summary_command(config, db_path, output_dir, runtime, args.at)
+        return _run_summary_command(config, db_path, output_dir, runtime, args.at, args.full_params, args.compact)
 
     days = args.days if args.command == "init" and args.days is not None else config.data.init_days
     if days < 1:
@@ -173,7 +175,13 @@ def _run_ingest(command: str, conn: sqlite3.Connection, config: Config, runtime:
 
 
 def _run_summary_command(
-    config: Config, db_path: Path, output_dir: Path, runtime: Runtime | None, at_text: str | None
+    config: Config,
+    db_path: Path,
+    output_dir: Path,
+    runtime: Runtime | None,
+    at_text: str | None,
+    full_params: bool,
+    compact: bool,
 ) -> int:
     try:
         at_ms = parse_at(at_text) if at_text is not None else None
@@ -191,7 +199,9 @@ def _run_summary_command(
             try:
                 ensure_schema(conn)
                 clients = build_clients(config, runtime) if at_ms is None else None
-                result = run_summary(conn, config, output_dir, runtime.clock, runtime.sleeper, clients, at_ms)
+                result = run_summary(
+                    conn, config, output_dir, runtime.clock, runtime.sleeper, clients, at_ms, full_params, compact
+                )
             finally:
                 conn.close()
     except (LockError, SummaryError, SummaryExistsError) as exc:

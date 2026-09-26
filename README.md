@@ -23,6 +23,7 @@ python -m coindata summary
 ```
 
 마지막 줄에 요약 파일 경로(`summaries/<요약 ID>.json`)가 출력된다. 이 파일 내용을 그대로 LLM에 전달한다.
+붙여넣기 분량을 줄이려면 `--compact`(들여쓰기 없음), 전체 파라미터가 필요하면 `--full-params`를 붙인다.
 `summary`는 실행할 때 먼저 최신 데이터를 받아 오므로 따로 `sync`를 실행할 필요는 없다.
 
 과거 시점을 다시 보고 싶을 때:
@@ -31,7 +32,8 @@ python -m coindata summary
 python -m coindata summary --at 2026-05-29T12:05Z
 ```
 
-시각은 UTC다(한국 시각 − 9시간). 외부 요청 없이 저장소만 읽으며, 같은 시각을 여러 번 만들어도 결과가 같다.
+시각은 UTC다(한국 시각 − 9시간).
+과거 시점 요약에서 그 시각에 아직 공개되지 않았을 수 있는 metrics 값에는 `possibly_unpublished_at_ref_time: true`가 붙는다. 외부 요청 없이 저장소만 읽으며, 같은 시각을 여러 번 만들어도 결과가 같다.
 여러 시점을 시간순으로 만들면 각 요약의 `state`가 바로 앞 시점 요약과 비교된다.
 
 코드를 갱신한 뒤:
@@ -85,17 +87,18 @@ coindata --help
 
 | 섹션 | 내용 |
 |---|---|
-| `meta` | 요약 ID, 기준 시각(`ref_time`)과 기준 가격, 현재가(진행 중인 봉, `is_closed: false`), 사용 파라미터와 해시, 시작점(`anchor_time`) |
+| `meta` | 요약 ID, 기준 시각(`ref_time`)과 기준 가격, 현재가(진행 중인 봉, `is_closed: false`), 파라미터 해시와 직전 요약 대비 변경분(`params_diff`), 시작점(`anchor_time`) |
 | `data_freshness` | 실행 시각 대비 데이터셋별 경과 분과 경고(`stale`). 과거 시점 요약은 판정하지 않는다 |
-| `price_structure` | TF별 ATR, 구조 상태, 최근 스윙 6개, 잠정 파동, 되돌림, 최근 캔들 5개, 진행 중인 봉 |
-| `regime` | TF별 효율성 상태와 변동성 상태, 각각의 지속 봉 수와 원값 |
-| `derivatives` | 프리미엄(bp, 변화량, 15분 평활 백분위), 계약 수 OI와 4분면, 롱숏·taker 비율 |
+| `price_structure` | TF별 ATR, 구조 상태와 고점·저점 관계(`higher`/`lower`/`equal`), 마지막 돌파, 최근 스윙 6개, 잠정 파동, 되돌림(확정 파동·진행 파동), 최근 캔들 5개, 진행 중인 봉. 가격마다 `ref_price` 대비 bp 거리 |
+| `regime` | TF별 효율성 상태(`er_direction` 포함)와 변동성 상태, 각각의 지속 봉 수와 원값 |
+| `derivatives` | 프리미엄(bp, 1분 값 백분위, 변화량, 15분 평활 백분위), 계약 수 OI와 4분면(확정 상태·원시 상태·지속), 롱숏·taker 비율과 백분위 |
+| `flow` | TF별 마지막 마감 봉의 taker 매수·매도 체결량, 델타, 불균형과 백분위, 델타 EMA. 공격적 체결 방향만 나타내며 OI의 롱·숏 구성은 나타내지 않는다 |
 | `funding` | 펀딩비(bp)와 다음 펀딩까지 남은 분. 비용 정보다 |
-| `levels` | 기준 가격 위아래의 레벨 구간, 근거, 1h ATR로 정규화한 거리 |
+| `levels` | 기준 가격 위아래의 레벨 구간, 근거, 1h ATR로 정규화한 거리와 bp 거리, 터치 횟수. `level_id`는 그 요약 안에서만 유효하다 |
 | `events` | 보고 기간 안에서 판정된 이벤트와 측정값. `bars_ago`는 해당 `tf` 봉 기준 경과 봉 수 |
 | `state` | 직전 요약 대비 상태 변화, 파라미터 변경 여부 |
 | `gaps` | 계산 구간의 미해소 결측과 이번 실행의 취득 실패 |
-| `unavailable` | 이번 버전에서 제공하지 않는 데이터(청산, 체결 기반 지표, 통계) |
+| `unavailable` | 이번 버전에서 제공하지 않는 데이터(청산, 체결 규모 분포, 통계) |
 
 - 시각은 모두 UTC `YYYY-MM-DDTHH:MMZ`다.
 - 값이 없으면 `null`이고 같은 자리의 `null_reason`에 사유가 있다. 0과 `null`은 다르다.

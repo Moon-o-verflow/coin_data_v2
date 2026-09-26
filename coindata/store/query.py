@@ -165,7 +165,7 @@ def previous_summary(conn: sqlite3.Connection, trigger: SummaryTrigger, ref_time
     - historical: historical 기록 중 기준 시각이 `ref_time`보다 앞선 것 가운데 기준 시각이 가장 늦은 것
       (같으면 생성 시각이 늦은 것).
     """
-    columns = 'summary_id, created_at, "trigger", ref_time, ref_price, params_hash, state, file_path'
+    columns = 'summary_id, created_at, "trigger", ref_time, ref_price, params_hash, state, file_path, params'
     if trigger is SummaryTrigger.MANUAL:
         row = conn.execute(
             f'SELECT {columns} FROM summary_log WHERE "trigger" = ? ORDER BY created_at DESC, summary_id DESC LIMIT 1',
@@ -179,5 +179,5 @@ def previous_summary(conn: sqlite3.Connection, trigger: SummaryTrigger, ref_time
         ).fetchone()
     if row is None:
         return None
-    sid, created, trig, ref, price, params_hash, state, path = row
-    return SummaryRecord(sid, created, SummaryTrigger(trig), ref, price, params_hash, state, path)
+    sid, created, trig, ref, price, params_hash, state, path, params = row
+    return SummaryRecord(sid, created, SummaryTrigger(trig), ref, price, params_hash, state, path, params)
