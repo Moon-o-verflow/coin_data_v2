@@ -30,6 +30,8 @@ FORBIDDEN = (
     "stop_loss", "take_profit", "probability", "prob", "win_rate", "expected_value", "confidence", "score",
     "support", "resistance",
 )
+# CLAUDE.md R-1: statistics 밖에서 쓰지 않는 이름 (접미사가 아니라 이름 검사)
+RATIO_NAMES = ("held_ratio", "failed_ratio", "probability", "prob", "win_rate", "hit_rate", "expected_value", "expectancy")
 AT1, AT2, AT3 = "2026-09-23T12:05Z", "2026-09-23T12:25Z", "2026-09-23T12:43Z"
 
 
@@ -47,6 +49,18 @@ def forbidden_tokens(document: Any) -> list[tuple[str, str]]:
     for text in strings_of(document):
         tokens = re.split(r"[^a-z0-9]+", text.lower())
         for word in FORBIDDEN:
+            parts = word.split("_")
+            if any(tokens[i : i + len(parts)] == parts for i in range(len(tokens))):
+                found.append((word, text))
+    return found
+
+
+def ratio_names_outside_statistics(document: dict[str, Any]) -> list[tuple[str, str]]:
+    rest = {k: v for k, v in document.items() if k != "statistics"}
+    found = []
+    for text in strings_of(rest):
+        tokens = re.split(r"[^a-z0-9]+", text.lower())
+        for word in RATIO_NAMES:
             parts = word.split("_")
             if any(tokens[i : i + len(parts)] == parts for i in range(len(tokens))):
                 found.append((word, text))
@@ -101,8 +115,18 @@ class LiveSummaryTest(SummaryTestCase):
         self.assertIsNone(doc["funding"]["null_reason"])
         self.assertEqual(doc["gaps"]["acquisition_failures"], [])
         self.assertEqual([tf["tf"] for tf in doc["regime"]["timeframes"]], ["15m", "30m", "1h", "1d"])
-        self.assertEqual(doc["statistics"], {"status": "not_implemented"})
-        self.assertEqual({u["item"] for u in doc["unavailable"]}, {"liquidation", "trade_size_distribution", "statistics"})
+        s1 = doc["statistics"]["s1"]
+        self.assertEqual((s1["definition_version"], s1["horizon_bars"], s1["min_n"]), ("S1.v1", [4, 8], 30))
+        self.assertEqual([h["horizon_bars"] for h in s1["horizons"]], [4, 8])
+        axes = [(b["axis"], b["value"]) for b in s1["horizons"][0]["buckets"]]
+        self.assertEqual(axes[0], ("all", "all"))
+        self.assertEqual([v for a, v in axes if a == "break_kind"], ["BOS", "MSS", "break_no_displacement", "break_unclassified"])
+        for b in s1["horizons"][0]["buckets"]:
+            self.assertEqual(b["held"] + b["failed"], b["n"])
+            if b["n"] < 30:
+                self.assertIsNone(b["held_ratio"])
+                self.assertEqual(b["null_reason"], "insufficient_sample")
+        self.assertEqual({u["item"] for u in doc["unavailable"]}, {"liquidation", "trade_size_distribution"})
         # 스키마 v2 (CR-2)
         self.assertEqual(meta["schema_version"], "2")
         self.assertNotIn("params", meta)
@@ -276,6 +300,12 @@ class ForbiddenWordTest(SummaryTestCase):
         documents.append(self.summary()[1])
         for doc in documents:
             self.assertEqual(forbidden_tokens(doc), [])
+            self.assertEqual(ratio_names_outside_statistics(doc), [])
+
+    def test_ratio_name_check_is_by_name_not_suffix(self) -> None:
+        doc = {"statistics": {"held_ratio": 0.5}, "candles": {"upper_wick_ratio": 0.1, "taker_buy_sell_ratio": 1.0}}
+        self.assertEqual(ratio_names_outside_statistics(doc), [])
+        self.assertEqual([w for w, _ in ratio_names_outside_statistics({"x": {"held_ratio": 1}})], ["held_ratio"])
 
     def test_checker_detects_tokens(self) -> None:
         self.assertEqual([w for w, _ in forbidden_tokens({"stop_loss": 1, "a": "long_signal"})], ["stop_loss", "signal"])

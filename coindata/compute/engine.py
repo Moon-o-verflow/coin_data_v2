@@ -24,6 +24,7 @@ from coindata.compute.levels import (
     window_stats,
 )
 from coindata.compute.regime import SHOCK, duration, efficiency_state, shock, volatility_state
+from coindata.compute.stats import S1_CONTEXT_TF, S1_TF, S1Result, s1
 from coindata.compute.series import ZERO_DENOMINATOR, BarSeries, Measured, measure, parse_tf, synthesize
 from coindata.compute.structure import (
     Break,
@@ -95,6 +96,11 @@ class TfAnalysis:
     retracement_tentative: float | None  # A.3.5 진행 파동 기준 깊이
     tentative_distance_atr: float | None
     flow: FlowResult  # A.12
+    # 봉별 값 (통계 부록 B가 쓴다). 각 값은 그 봉 마감 시점까지의 데이터로만 정해진다.
+    breaks: tuple[Break, ...]
+    efficiency_states: tuple[str | None, ...]
+    volatility_states: tuple[str | None, ...]
+    atr_values: tuple[float | None, ...]
     candles: tuple[CandleRow, ...]  # 최근 K개 마감 봉, 시간순
     events: tuple[ev.Event, ...]
 
@@ -120,6 +126,7 @@ class Analysis:
     touches: dict[str, TouchStats]  # level_id → 터치 횟수 (A.7.5)
     derivatives: DerivativesResult
     events: tuple[ev.Event, ...]  # 전체 이벤트, bar_time 순
+    s1: S1Result | None  # 부록 B.1. 15m 또는 1h가 계산 대상이 아니면 None
 
 
 # ---------------------------------------------------------------------------
@@ -230,9 +237,16 @@ def analyze(inp: ComputeInput, config: Config) -> Analysis:
     derivatives, deriv_events = _derivatives(inp, config)
     events += deriv_events
     events.sort(key=lambda e: (e.bar_time, e.tf, e.type))
+    s1_result = None
+    if S1_TF in per_tf and S1_CONTEXT_TF in per_tf:
+        m15, h1 = per_tf[S1_TF], per_tf[S1_CONTEXT_TF]
+        s1_result = s1(
+            m15.series, m15.breaks, m15.atr_values, m15.volatility_states, h1.series, h1.efficiency_states,
+            config.stats.s1.horizon_bars, config.stats.min_n,
+        )
     return Analysis(
         inp.symbol, inp.anchor_ms, inp.ref_time, ref_price, tuple(results), stats, level_result, touches, derivatives,
-        tuple(events),
+        tuple(events), s1_result,
     )
 
 
@@ -308,6 +322,10 @@ def _analyze_tf(series: BarSeries, config: Config, ref_price: float) -> TfAnalys
         retracement_tentative=retracement_tentative(zz.swings, zz.tentative, ref_price),
         tentative_distance_atr=tentative,
         flow=flow(series, ind.flow.ema_n, ind.flow.pct_lookback),
+        breaks=st.breaks,
+        efficiency_states=tuple(eff),
+        volatility_states=tuple(vol),
+        atr_values=tuple(atr_values),
         candles=candle_rows,
         events=tuple(tf_events),
     )

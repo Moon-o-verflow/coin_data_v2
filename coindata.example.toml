@@ -131,3 +131,9 @@ publication_lag_minutes = { sum_open_interest = 5, sum_open_interest_value = 5, 
 [plans]
 default_ttl_hours = 24            # 계획 만료 기본값: 등록 기준 요약 시각 + 이 시간 (FR-7.1)
 report_hours = 48                 # 요약에 싣는 최근 종료 계획의 범위 (FR-7.6)
+
+[stats]
+min_n = 30                         # 버킷 표본이 이보다 적으면 비율을 싣지 않는다 (부록 B)
+
+[stats.s1]
+horizon_bars = [4, 8]             # 돌파 유지 판정 기간(15m 봉). 바꾸면 정의 버전 변경 (부록 B.1.2)

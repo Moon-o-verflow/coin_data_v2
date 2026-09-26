@@ -267,6 +267,17 @@ def _default_publication_lag() -> dict[str, int]:
 
 
 @dataclass(frozen=True, slots=True)
+class S1Config:
+    horizon_bars: tuple[int, ...] = (4, 8)  # 부록 B.1.2. 바꾸면 정의 버전을 올린다
+
+
+@dataclass(frozen=True, slots=True)
+class StatsConfig:
+    min_n: int = 30  # 부록 B
+    s1: S1Config = field(default_factory=S1Config)
+
+
+@dataclass(frozen=True, slots=True)
 class PlansConfig:
     default_ttl_hours: int = 24  # FR-7.1
     report_hours: int = 48  # FR-7.6
@@ -291,6 +302,7 @@ class Config:
     report: ReportConfig = field(default_factory=ReportConfig)
     historical: HistoricalConfig = field(default_factory=HistoricalConfig)
     plans: PlansConfig = field(default_factory=PlansConfig)
+    stats: StatsConfig = field(default_factory=StatsConfig)
 
 
 # ---------------------------------------------------------------------------
@@ -351,6 +363,10 @@ def _convert(tp: Any, value: Any, key: str) -> Any:
         return value
     origin = typing.get_origin(tp)
     if origin is tuple:
+        if typing.get_args(tp)[0] is int:
+            if not isinstance(value, list) or not all(isinstance(i, int) and not isinstance(i, bool) for i in value):
+                raise ConfigError(f"{key}: 정수 배열이어야 한다")
+            return tuple(value)
         if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
             raise ConfigError(f"{key}: 문자열 배열이어야 한다")
         return tuple(value)
@@ -480,6 +496,11 @@ def _validate_windows(config: Config) -> list[str]:
     ):
         if value < 1:
             problems.append(f"{key}: 1 이상이어야 한다")
+    horizons = config.stats.s1.horizon_bars
+    if not horizons or min(horizons) < 1 or list(horizons) != sorted(set(horizons)):
+        problems.append("stats.s1.horizon_bars: 1 이상의 서로 다른 정수를 오름차순으로 적어야 한다")
+    if config.stats.min_n < 1:
+        problems.append("stats.min_n: 1 이상이어야 한다")
     if min(config.plans.default_ttl_hours, config.plans.report_hours) < 1:
         problems.append("plans.default_ttl_hours, report_hours: 1 이상이어야 한다")
     if config.indicators.structure.equal_tol_atr < 0:

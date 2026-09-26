@@ -16,6 +16,7 @@ from typing import Any
 
 from coindata.compute import events as ev
 from coindata.compute.engine import Analysis, TfAnalysis
+from coindata.compute import stats as st
 from coindata.compute.flow import FlowResult
 from coindata.compute.levels import Level, TouchStats, distance_bp
 from coindata.compute.series import Measured
@@ -43,7 +44,6 @@ PERCENT = 100
 UNAVAILABLE: tuple[tuple[str, str], ...] = (
     ("liquidation", "source_unavailable"),
     ("trade_size_distribution", "not_implemented"),
-    ("statistics", "not_implemented"),
 )
 
 # 이벤트 측정값의 자릿수 종류. 여기에 없는 실수는 비율 자릿수를 쓴다.
@@ -240,7 +240,7 @@ def build_summary(ctx: SummaryContext) -> BuiltSummary:
         "events": [_event(e, f) for e in a.events],
         "plans": [_plan(v, f) for v in ctx.plans],
         "state": _state(ctx, state, hashed),
-        "statistics": {"status": "not_implemented"},
+        "statistics": _statistics(a, f),
         "gaps": {
             "open": [_gap(g) for g in ctx.gaps],
             "acquisition_failures": list(ctx.failures),
@@ -691,4 +691,61 @@ def _plan(view: PlanView, f: _Fmt) -> dict[str, Any]:
             {"path": c.path, "equals": c.equals, "value": c.value, "met": c.met} for c in view.context.co_conditions
         ],
         "evaluation_gaps": [{"start": format_time(g.start_ms), "end": format_time(g.end_ms)} for g in ev.evaluation_gaps],
+    }
+
+
+S1_NOTE = "관측 빈도는 과거 표본의 기술이며 다음 사건의 발생 가능성을 뜻하지 않는다."
+REQUIRED_TIMEFRAME_MISSING = "required_timeframe_missing"
+
+
+def _statistics(a: Analysis, f: _Fmt) -> dict[str, Any]:
+    """부록 B.1.7. 현재 상태에 해당하는 버킷만 싣는다. break_kind는 네 버킷 모두."""
+    result = a.s1
+    if result is None:
+        return {"s1": None, "s1_null_reason": REQUIRED_TIMEFRAME_MISSING}
+    by_tf = {tf.tf: tf for tf in a.timeframes}
+    h1_now = by_tf[st.S1_CONTEXT_TF].efficiency_state or st.UNAVAILABLE
+    m15_now = by_tf[st.S1_TF].volatility_state or st.UNAVAILABLE
+    selections: list[tuple[str, str, list[st.Sample]]] = [
+        ("all", "all", list(result.samples)),
+        ("h1_efficiency_state", h1_now, [s for s in result.samples if s.h1_efficiency_state == h1_now]),
+        ("m15_volatility_state", m15_now, [s for s in result.samples if s.m15_volatility_state == m15_now]),
+    ]
+    selections += [("break_kind", k, [s for s in result.samples if s.brk.break_kind == k]) for k in st.BREAK_KINDS]
+    horizons = []
+    for n in result.horizon_bars:
+        buckets = []
+        for axis, value, samples in selections:
+            b = st.bucket(samples, n, result.min_n)
+            buckets.append({
+                "axis": axis,
+                "value": value,
+                "n": b.n,
+                "held": b.held,
+                "failed": b.failed,
+                "held_ratio": f.ratio(b.held_ratio),
+                "mfe_bp_median": f.bp(b.mfe_bp_median),
+                "mae_bp_median": f.bp(b.mae_bp_median),
+                "mfe_atr_median": f.ratio(b.mfe_atr_median),
+                "mae_atr_median": f.ratio(b.mae_atr_median),
+                "null_reason": b.null_reason,
+            })
+        horizons.append({"horizon_bars": n, "buckets": buckets})
+    return {
+        "s1": {
+            "name": "structure_break_hold",
+            "definition_version": result.definition_version,
+            "note": S1_NOTE,
+            "tf": st.S1_TF,
+            "context_tf": st.S1_CONTEXT_TF,
+            "horizon_bars": list(result.horizon_bars),
+            "min_n": result.min_n,
+            "period_start": format_time(result.period_start),
+            "period_end": format_time(result.period_end),
+            "samples": len(result.samples),
+            "excluded_overlap": result.excluded_overlap,
+            "excluded_gap": result.excluded_gap,
+            "pending_outcome": result.pending_outcome,
+            "horizons": horizons,
+        }
     }
