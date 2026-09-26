@@ -2,7 +2,7 @@
 
 | 항목 | 내용 |
 |---|---|
-| 문서 버전 | 1.11 |
+| 문서 버전 | 1.12 |
 | 작성일 | 2026-09-24 |
 | 대상 시스템 | 바이낸스 USD-M 무기한 선물 ETH/USDT 판단 재료 생성기 |
 | 선행 버전 | coinDataMinning v2.1.3 |
@@ -20,6 +20,7 @@
 | 1.6 | 2단계 결정: 신선도를 실행 시각 기준으로 판정(FR-4.3), 요약 파일명·상태 비교 항목·`unavailable`·표기 규칙(FR-4.1~4.5), 경로 의존 계산의 고정 시작점(A.1.8), `compute`·`report` 설정 |
 | 1.7 | 부록 A v1.1: 돌파 대상을 유형별 최신 확정 스윙 하나로 한정(A.3.4), shock 시작의 효율성 변화 이벤트 중복 제거, 레벨 스윙 출처·정규화 TF 설정화, 5m·평활 TF 이벤트의 `tf`·`bars_ago` 기준 명시 |
 | 1.8 | 과거 시점 요약 `summary --at`(FR-4.8), `summary_log.trigger`에 `historical` 추가(스키마 버전 2), 요약 출력 단위 보완(FR-4.1) |
+| 1.12 | CR-2.2 S-1 돌파 유지율 통계(부록 B 신설, `statistics` 섹션), CLAUDE.md R-1 개정(과거 빈도 기술의 예외와 안전장치), T-6 이름 목록 검사 |
 | 1.11 | CR-2.1 조건 레지스트리와 소급 평가(10.7, FR-7.x), `plan`·`plan_state_log` 테이블(저장소 스키마 버전 5), 요약 섹션 `plans`, `plan` 명령. 13장의 판단 로그 중 조건 추적을 범위 안으로 이동 |
 | 1.10 | CR-2 첫 묶음, 부록 A v1.3, 요약 스키마 v2: 스윙 비교 허용 오차(A.3.3), 마지막 돌파(A.3.4), 진행 파동 되돌림(A.3.5), 4분면 3×3·분포 불감대·지속 조건(A.5.1), 비율·프리미엄 1분 백분위(A.5.2, A.5.4), 레벨 식별자·bp 거리·터치 횟수(A.7.4, A.7.5), 체결 흐름 계열 `flow`(A.12), 방향 서술 필드, 과거 모드 필드별 공개 지연 표시, 출력 정리. 저장소 스키마 버전 4 |
 | 1.9 | 부록 A v1.2: `quadrant_change`를 확정 4분면 사이의 변화로 한정(A.8.3). 결손 분류 `awaiting_archive` 추가(12.2, 스키마 버전 3). 캔들 비율·ATR 배수의 null 사유 표기(FR-4.2) |
@@ -644,8 +645,8 @@ ATR 기반 ZigZag로 스윙 고점·저점을 식별한다. 반전 임계값은 
 **FR-3.13 계열 분류**
 모든 지표와 이벤트는 `price_structure`, `regime`, `derivatives`, `level`, `flow` 중 하나의 계열로 분류되어 출력된다. `flow`는 1분봉의 taker 체결량에서 나온 체결 흐름이다(A.12). 가격 파생도 포지션 데이터도 아니므로 독립 계열로 둔다. 펀딩 정보(FR-1.8)는 판단 지표가 아니라 비용 정보이므로 계열 분류 대상이 아니다.
 
-**FR-3.14 확률 미산출**
-시스템은 확률, 승률, 기대값을 산출하지 않는다. 해당 필드는 통계 기능 구현 이전까지 존재하지 않는다.
+**FR-3.14 확률 미산출과 과거 빈도 통계**
+시스템은 확률, 승률, 기대값을 산출하지 않는다. 예외로 `statistics` 섹션은 부록 B에 정의된 과거 발생 빈도를 기술한다(CLAUDE.md R-1). 관측 빈도는 과거 표본의 기술이며 다음 사건의 발생 가능성을 뜻하지 않는다. 다른 섹션에는 비율·확률 필드를 두지 않는다.
 
 ### 10.4 요약 (report)
 
@@ -665,7 +666,7 @@ ATR 기반 ZigZag로 스윙 고점·저점을 식별한다. 반전 임계값은 
 | `events` | 판정된 이벤트 목록과 측정값 |
 | `plans` | 등록된 계획의 상태, 전이 이력, 등록 시·활성화 이후 계산값 (FR-7.6) |
 | `state` | 직전 요약 ID와 생성 시각, 직전 대비 주요 변화 |
-| `statistics` | 통계 미구현 표시 |
+| `statistics` | 과거 발생 빈도 통계(부록 B). 현재 상태에 해당하는 버킷만 싣는다 |
 | `gaps` | 계산 구간 내 결측과 취득 실패 |
 | `unavailable` | 이번 버전에서 제공되지 않는 데이터와 사유: 청산(`source_unavailable`), 체결 규모 분포(`not_implemented`), 통계(`not_implemented`) |
 
@@ -942,7 +943,7 @@ pending·active 계획과, 종료 시각이 기준 시각 전 `plans.report_hour
 | 청산 수집 및 청산 의존 지표 | 실시간 수집기 부재, 과거 복원 불가 | ingest |
 | 거래량·OI 프로파일 | 레벨 강도 산출과 함께 구현 | compute |
 | 레벨 강도 점수 | 과거 반응 이력 필요 | compute |
-| MAE/MFE, base rate | 누적 데이터 필요 | compute (신규) |
+| base rate 중 S-1 외 통계(레벨 터치 차수별 반응 S-2 등), 통계 캐시 | S-1 이후 결정 | compute |
 | 판단 서술 로그와 결과 라벨링 (조건 추적은 10.7로 이동) | 검증 1단계 이후 | store, report |
 | 이벤트 감지 및 알림 | 유효 이벤트 식별 이후 | compute/report 사이 |
 | 실시간 수집기 | 별도 장비 구성 이후 | ingest |
@@ -1602,6 +1603,8 @@ TF별로 최근 `R_tf`개 마감 봉 안에서 발생한 이벤트만 보고한�
 | `report.digits_bp` | 2 | FR-4.1 |
 | `report.digits_pct` | 1 | FR-4.1 |
 | `report.digits_volume` | 3 | FR-4.1 |
+| `stats.min_n` | 30 | 부록 B |
+| `stats.s1.horizon_bars` | [4, 8] | 부록 B (변경 시 정의 버전 변경) |
 | `plans.default_ttl_hours` | 24 | FR-7.1 |
 | `plans.report_hours` | 48 | FR-7.6 |
 | `historical.publication_lag_minutes` | {taker_buy_sell_ratio: 10, 나머지 metrics 컬럼: 5} | FR-4.8 |
@@ -1644,3 +1647,57 @@ PRD v1.2 (부록 A v0.2):
 - **FR-3.12**: 이벤트 목록을 A.8.3으로 참조.
 - **FR-4.1**: `regime`, `derivatives` 섹션 내용을 두 축과 프리미엄 정의에 맞춰 수정.
 - **CLAUDE.md**: 용어집(레짐, 충격 상태, BOS, MSS, 구조 상태, 결손 표시)과 R-2 금지어(`support`, `resistance`) 수정.
+
+---
+
+## 부록 B. 과거 발생 빈도 통계 (v1.0)
+
+**원칙** (CLAUDE.md R-1 예외)
+- 통계는 예측이 아니라 과거 발생 빈도의 기술이다. 관측 빈도는 과거 표본의 기술이며 다음 사건의 발생 가능성을 뜻하지 않는다.
+- 결과 정의(판정 기간, 실패 조건, 제외 규칙)는 결과를 보기 전에 이 부록에 확정한다. 정의를 바꾸려면 `definition_version`을 올리고 B.9 변경 이력에 사유를 기록한다. 결과를 본 뒤 판정 기간을 추가·변경하는 것도 정의 변경이다.
+- 모든 버킷 값은 `n`과 원 건수를 동반한다. `n < min_n`이면 비율과 중앙값을 싣지 않는다.
+- 엔진이 시작점(A.1.8)부터 한 번 순회한 결과를 쓴다. 각 봉 시점의 상태는 그 시점까지의 데이터로만 정해지므로 봉마다 다시 계산하지 않는다. 판정 기간이 기준 시각을 넘는 표본은 제외하므로 기준 시각 이후 데이터가 통계에 영향을 주지 않는다.
+
+### B.1 S-1 돌파 유지율 (`definition_version = "S1.v1"`)
+
+**B.1.1 표본**
+- 시작점부터 기준 시각까지의 15m `structure_break` 이벤트 전체(A.3.4, `break_kind` 무관). 표본 TF(15m)와 맥락 TF(1h)는 이 정의의 일부이며 설정값이 아니다.
+
+**B.1.2 판정 기간**
+- 돌파 봉 t 다음 `N`봉(t+1 … t+N). `N ∈ horizon_bars = [4, 8]`(1시간, 2시간). 두 기간은 항상 함께 계산·출력하며 하나만 골라 싣지 않는다.
+
+**B.1.3 결과**
+- **실패(`failed`)**: 판정 기간 안의 15m 종가가 돌파된 스윙 가격 X로 되돌아온 경우. 위쪽 돌파(`above_swing_high`)는 `C ≤ X`, 아래쪽 돌파(`below_swing_low`)는 `C ≥ X`. 돌파 조건의 반대다.
+- **유지(`held`)**: 판정 기간 N봉 동안 한 번도 되돌아오지 않은 경우.
+- **순행·역행**: 실패 여부와 무관하게 판정 기간 N봉 전체의 고가·저가로 잰다. 기준가는 돌파 봉 종가 `C_t`. 위쪽 돌파의 순행 = `max(High) − C_t`, 역행 = `C_t − min(Low)`(아래쪽 돌파는 대칭, 0 미만이면 0). bp(`/ C_t × 10000`)와 ATR 배수(`/ ATR_{t−1}`, A.1.7, 같은 TF) 둘 다 싣는다. `ATR_{t−1}`이 없으면 그 표본은 ATR 배수 중앙값에서만 빠진다.
+
+**B.1.4 제외**
+- 중복(`excluded_overlap`): 시간순으로 보며, 남긴 표본의 긴 판정 기간(8봉) 안에 다시 나온 같은 방향 돌파는 제외한다. 반대 방향 돌파는 남긴다. 제외한 표본은 이후 중복 판정의 기준이 되지 않는다.
+- 결측(`excluded_gap`): 긴 판정 기간(8봉) 안에 부재 봉이 있으면 제외한다.
+- 미확정(`pending_outcome`): 긴 판정 기간이 기준 시각을 넘으면 제외한다.
+- 판정 순서는 중복 → 미확정 → 결측이다. 세 기간 모두 같은 표본 집합을 쓴다.
+
+**B.1.5 분류 축** (한 번에 하나씩. 교차 버킷은 `n`을 확인한 뒤 결정한다)
+- `all`: 전체.
+- `h1_efficiency_state`: 돌파 시점의 1h `efficiency_state`(shock 포함). 기준 봉은 `close_time ≤ 돌파 봉 close_time`인 마지막 1h 봉이다. 15m 돌파 봉과 1h 봉이 같은 시각에 마감하면 그 1h 봉을 쓴다(같은 시각 마감은 미래 참조가 아니다). 상태가 없으면 `unavailable`.
+- `m15_volatility_state`: 돌파 봉의 15m `volatility_state`. 없으면 `unavailable`.
+- `break_kind`: `BOS`, `MSS`, `break_no_displacement`, `break_unclassified`.
+
+**B.1.6 버킷 값**
+- `n`, `held`, `failed`, `held_ratio`(= held / n), `mfe_bp_median`, `mae_bp_median`, `mfe_atr_median`, `mae_atr_median`.
+- `n < min_n`이면 `held_ratio`와 중앙값 네 개는 `null`, `null_reason = insufficient_sample`. 건수는 싣는다.
+
+**B.1.7 요약 출력 (`statistics.s1`)**
+- `definition_version`, `horizon_bars`, `min_n`, `period_start`(표본 TF 첫 봉), `period_end`(판정 기간이 끝난 마지막 돌파 봉 시각의 상한), `samples`(남긴 표본 수), `excluded_overlap`, `excluded_gap`, `pending_outcome`.
+- 판정 기간마다 버킷: `all`, 현재 1h `efficiency_state`의 `h1_efficiency_state` 버킷, 현재 15m `volatility_state`의 `m15_volatility_state` 버킷, `break_kind` 네 버킷 모두. `break_kind`는 현재 상태가 없는 속성이므로 모두 싣는다.
+- 15m 또는 1h가 계산 대상 TF가 아니면 `statistics.s1`은 `null`, 사유 `required_timeframe_missing`.
+
+**B.1.8 설정**
+- `stats.min_n = 30`, `stats.s1.horizon_bars = [4, 8]`. 검증 상태 `미검증`. `horizon_bars`를 바꾸는 것은 정의 변경이다(B.9).
+
+### B.9 변경 이력
+
+| 정의 버전 | 날짜 | 내용 | 사유 |
+|---|---|---|---|
+| S1.v1 | 2026-09-26 | 최초 확정. 판정 기간 [4, 8], 실패 `C ≤ X`(대칭), 긴 기간 기준 중복·결측 제외 | CR-2.2. 결과를 보기 전에 확정 |
+
