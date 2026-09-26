@@ -7,7 +7,8 @@ import unicodedata
 from pathlib import Path
 
 from coindata.ingest.timeutil import format_ms
-from coindata.models import ALL_FIELDS, Dataset, OpenGap
+from coindata.models import ALL_FIELDS, Dataset, OpenGap, PlanState
+from coindata.store import plans as plan_store
 from coindata.store import query
 
 
@@ -79,3 +80,20 @@ def _gap_line(gap: OpenGap) -> str:
         "  " + _left(gap.dataset.value, 18) + _left(field, 24)
         + f"{format_ms(gap.range.start_ms)} ~ {format_ms(gap.range.end_ms)}  {gap.reason.value}"
     )
+
+
+def render_plan_list(conn: sqlite3.Connection, show_all: bool) -> str:
+    """`plan list` 출력. 기본은 pending·active 계획만 보여준다."""
+    lines = []
+    for record in plan_store.list_plans(conn):
+        state = record.evaluation.state if record.evaluation else PlanState.PENDING
+        if not show_all and not state.is_open:
+            continue
+        spec = record.spec
+        last = record.evaluation.transitions[-1] if record.evaluation and record.evaluation.transitions else None
+        when = f" {format_ms(last.time)}" if last else ""
+        lines.append(
+            f"{spec.plan_key}  {spec.side}  {state.value}{when}  "
+            f"activation {spec.activation.kind} {spec.activation.price}  만료 {format_ms(record.expires_at)}"
+        )
+    return "\n".join(lines) if lines else "계획이 없다."

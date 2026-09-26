@@ -181,3 +181,15 @@ def previous_summary(conn: sqlite3.Connection, trigger: SummaryTrigger, ref_time
         return None
     sid, created, trig, ref, price, params_hash, state, path, params = row
     return SummaryRecord(sid, created, SummaryTrigger(trig), ref, price, params_hash, state, path, params)
+
+
+def get_summary(conn: sqlite3.Connection, summary_id: str) -> SummaryRecord | None:
+    row = conn.execute(
+        'SELECT summary_id, created_at, "trigger", ref_time, ref_price, params_hash, state, file_path, params '
+        "FROM summary_log WHERE summary_id = ?",
+        (summary_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    sid, created, trig, ref, price, params_hash, state, path, params = row
+    return SummaryRecord(sid, created, SummaryTrigger(trig), ref, price, params_hash, state, path, params)

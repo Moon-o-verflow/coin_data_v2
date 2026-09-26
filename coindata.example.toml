@@ -127,3 +127,7 @@ digits_volume = 3
 [historical]
 # 과거 시점 요약에서 공개 지연 가능성을 표시할 필드별 지연(분) (FR-4.8)
 publication_lag_minutes = { sum_open_interest = 5, sum_open_interest_value = 5, top_position_ratio = 5, top_account_ratio = 5, global_account_ratio = 5, taker_buy_sell_ratio = 10 }
+
+[plans]
+default_ttl_hours = 24            # 계획 만료 기본값: 등록 기준 요약 시각 + 이 시간 (FR-7.1)
+report_hours = 48                 # 요약에 싣는 최근 종료 계획의 범위 (FR-7.6)

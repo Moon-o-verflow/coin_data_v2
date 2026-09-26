@@ -262,3 +262,144 @@ class SummaryRecord:
     state: str  # FR-4.4 비교용 상태값 JSON
     file_path: str
     params: str | None  # 사용된 파라미터 원문 JSON. 저장소 스키마 버전 4 이전 기록은 None
+
+
+# ---------------------------------------------------------------------------
+# 조건 레지스트리 (PRD 10.7)
+# ---------------------------------------------------------------------------
+
+
+class PlanState(enum.Enum):
+    PENDING = "pending"
+    ACTIVE = "active"
+    VOID_BEFORE_ACTIVATION = "void_before_activation"
+    INVALIDATED = "invalidated"
+    OBJECTIVE_REACHED = "objective_reached"
+    EXPIRED = "expired"
+    EXPIRED_ACTIVE = "expired_active"
+    CANCELLED = "cancelled"
+    AMBIGUOUS = "ambiguous"
+
+    @property
+    def is_open(self) -> bool:
+        return self in (PlanState.PENDING, PlanState.ACTIVE)
+
+
+@dataclass(frozen=True, slots=True)
+class Condition:
+    kind: str  # close_above / close_below / touch_above / touch_below
+    tf: str | None  # close_*만
+    price: float
+
+    @property
+    def is_close(self) -> bool:
+        return self.kind.startswith("close_")
+
+    @property
+    def is_above(self) -> bool:
+        return self.kind.endswith("_above")
+
+
+@dataclass(frozen=True, slots=True)
+class CoCondition:
+    path: str  # FR-4.4 state 항목 경로
+    equals: str
+
+
+@dataclass(frozen=True, slots=True)
+class PlanSpec:
+    """`plan/1`의 계획 하나 (FR-7.1). `side`는 입력을 되돌려 주는 값이다(R-2)."""
+
+    plan_key: str
+    source_summary_id: str
+    plan_id: str
+    side: str  # long / short
+    activation: Condition
+    invalidation: Condition
+    objective: Condition | None
+    co_conditions: tuple[CoCondition, ...]
+    expires_at: int | None  # 입력값. 없으면 등록 시 기본 만료 시각을 쓴다
+
+
+@dataclass(frozen=True, slots=True)
+class NearestLevel:
+    level_id: str
+    boundary: float
+    distance_bp: float
+    distance_atr: float | None
+    activation_inside_zone: bool
+
+
+@dataclass(frozen=True, slots=True)
+class AtRegistration:
+    source_ref_time: int
+    source_ref_price: float
+    atr: float | None  # levels.normalize_tf ATR
+    risk_bp: float
+    risk_atr: float | None
+    reward_bp: float | None
+    reward_atr: float | None
+    activation_distance_bp: float
+    nearest_opposing_level: NearestLevel | None
+    registration_lag_minutes: int
+    params_changed_since_source: bool
+
+
+@dataclass(frozen=True, slots=True)
+class CoConditionResult:
+    path: str
+    equals: str
+    value: str | None
+    met: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ActivationContext:
+    activation_time: int
+    atr: float | None  # 활성화 시점의 levels.normalize_tf ATR
+    co_conditions: tuple[CoConditionResult, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class Transition:
+    state: PlanState
+    time: int
+    price: float | None
+    gap_before: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SinceActivation:
+    activation_time: int
+    activation_price: float
+    mfe_bp: float | None
+    mae_bp: float | None
+    mfe_atr: float | None
+    mae_atr: float | None
+    excursion_null_reason: str | None
+    end_time: int | None
+    end_reason: PlanState | None
+    end_price: float | None
+    bars_to_end: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class PlanEvaluation:
+    state: PlanState
+    transitions: tuple[Transition, ...]
+    evaluation_gaps: tuple[TimeRange, ...]
+    since_activation: SinceActivation | None
+    evaluated_until: int  # 평가한 마지막 분의 다음 분
+
+
+@dataclass(frozen=True, slots=True)
+class PlanRecord:
+    spec: PlanSpec
+    spec_json: str  # 입력 원문(계획 하나)
+    registered_at: int
+    expires_at: int
+    cancelled_at: int | None
+    at_registration: AtRegistration
+    activation_context: ActivationContext | None
+    evaluation: PlanEvaluation | None
+    evaluated_at: int | None

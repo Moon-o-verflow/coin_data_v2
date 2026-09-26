@@ -267,6 +267,12 @@ def _default_publication_lag() -> dict[str, int]:
 
 
 @dataclass(frozen=True, slots=True)
+class PlansConfig:
+    default_ttl_hours: int = 24  # FR-7.1
+    report_hours: int = 48  # FR-7.6
+
+
+@dataclass(frozen=True, slots=True)
 class HistoricalConfig:
     # FR-4.8: 과거 시점 요약에서 공개 지연 가능성을 표시할 필드별 지연(분).
     publication_lag_minutes: dict[str, int] = field(default_factory=_default_publication_lag)
@@ -284,6 +290,7 @@ class Config:
     compute: ComputeConfig = field(default_factory=ComputeConfig)
     report: ReportConfig = field(default_factory=ReportConfig)
     historical: HistoricalConfig = field(default_factory=HistoricalConfig)
+    plans: PlansConfig = field(default_factory=PlansConfig)
 
 
 # ---------------------------------------------------------------------------
@@ -473,6 +480,8 @@ def _validate_windows(config: Config) -> list[str]:
     ):
         if value < 1:
             problems.append(f"{key}: 1 이상이어야 한다")
+    if min(config.plans.default_ttl_hours, config.plans.report_hours) < 1:
+        problems.append("plans.default_ttl_hours, report_hours: 1 이상이어야 한다")
     if config.indicators.structure.equal_tol_atr < 0:
         problems.append("indicators.structure.equal_tol_atr: 0 이상이어야 한다")
     if any(v < 0 for v in config.historical.publication_lag_minutes.values()):

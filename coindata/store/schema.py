@@ -10,7 +10,7 @@ import sqlite3
 from coindata.models import ArchiveFileStatus, Dataset, GapReason, RunMode, RunStatus, SummaryTrigger
 from coindata.store.db import StoreError, transaction
 
-SCHEMA_VERSION = 4  # 2: summary_log.trigger에 historical 추가, 3: data_gap.reason에 awaiting_archive 추가, 4: summary_log.params
+SCHEMA_VERSION = 5  # 5: plan, plan_state_log. 2: summary_log.trigger에 historical 추가, 3: data_gap.reason에 awaiting_archive 추가, 4: summary_log.params
 
 
 def _values(enum_type: type) -> str:
@@ -118,6 +118,33 @@ _DDL: tuple[str, ...] = (
         file_path TEXT NOT NULL,
         params TEXT
     )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS plan (
+        plan_key TEXT PRIMARY KEY,
+        source_summary_id TEXT NOT NULL,
+        spec TEXT NOT NULL,
+        registered_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        cancelled_at INTEGER,
+        at_registration TEXT NOT NULL,
+        activation_context TEXT,
+        state TEXT,
+        evaluation TEXT,
+        evaluated_at INTEGER
+    ) WITHOUT ROWID
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS plan_state_log (
+        plan_key TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        state TEXT NOT NULL,
+        time INTEGER NOT NULL,
+        price REAL,
+        gap_before INTEGER NOT NULL,
+        evaluated_at INTEGER NOT NULL,
+        PRIMARY KEY (plan_key, seq)
+    ) WITHOUT ROWID
     """,
 )
 

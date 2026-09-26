@@ -22,7 +22,7 @@ from tests.test_cli import D21, CliTestCase
 
 SECTIONS = (
     "meta", "data_freshness", "price_structure", "regime", "derivatives", "flow", "funding",
-    "levels", "events", "state", "statistics", "gaps", "unavailable",
+    "levels", "events", "plans", "state", "statistics", "gaps", "unavailable",
 )
 # CLAUDE.md R-2 금지어 목록
 FORBIDDEN = (

@@ -25,7 +25,10 @@ from coindata.models import (
     Dataset,
     FundingInfo,
     Kline,
+    ActivationContext,
     OpenGap,
+    PlanEvaluation,
+    PlanRecord,
     SummaryRecord,
     SummaryTrigger,
 )
@@ -56,6 +59,15 @@ class DatasetLast:
 
 
 @dataclass(frozen=True, slots=True)
+class PlanView:
+    """요약의 `plans` 섹션에 실을 계획 하나와 그 평가 (FR-7.6)."""
+
+    record: PlanRecord
+    evaluation: PlanEvaluation
+    context: ActivationContext | None
+
+
+@dataclass(frozen=True, slots=True)
 class SummaryContext:
     """요약 한 건을 만드는 데 필요한 입력. cli가 모은다."""
 
@@ -74,6 +86,7 @@ class SummaryContext:
     gaps: tuple[OpenGap, ...]
     previous: SummaryRecord | None
     full_params: bool  # --full-params
+    plans: tuple[PlanView, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,6 +238,7 @@ def build_summary(ctx: SummaryContext) -> BuiltSummary:
         "funding": _funding(ctx, historical, f),
         "levels": _levels(a, ctx.config, f),
         "events": [_event(e, f) for e in a.events],
+        "plans": [_plan(v, f) for v in ctx.plans],
         "state": _state(ctx, state, hashed),
         "statistics": {"status": "not_implemented"},
         "gaps": {
@@ -616,3 +630,65 @@ def _gap(g: OpenGap) -> dict[str, Any]:
         "reason": g.reason.value,
     }
 
+
+
+def _condition(c: Any) -> dict[str, Any] | None:
+    return None if c is None else {"kind": c.kind, "tf": c.tf, "price": c.price}
+
+
+def _plan(view: PlanView, f: _Fmt) -> dict[str, Any]:
+    """FR-7.6. 입력 원문, 상태, 전이 이력, 계산 필드. `side`는 입력을 되돌려 준 값이다(R-2)."""
+    spec, reg, ev = view.record.spec, view.record.at_registration, view.evaluation
+    since = ev.since_activation
+    nearest = reg.nearest_opposing_level
+    return {
+        "plan_key": spec.plan_key,
+        "input": {
+            "side": spec.side,
+            "activation": _condition(spec.activation),
+            "invalidation": _condition(spec.invalidation),
+            "objective": _condition(spec.objective),
+            "co_conditions": [{"path": c.path, "equals": c.equals} for c in spec.co_conditions],
+        },
+        "state": ev.state.value,
+        "expires_at": format_time(view.record.expires_at),
+        "transitions": [
+            {"state": t.state.value, "time": format_time(t.time), "price": f.price(t.price), "gap_before": t.gap_before}
+            for t in ev.transitions
+        ],
+        "at_registration": {
+            "source_ref_time": format_time(reg.source_ref_time),
+            "source_ref_price": f.price(reg.source_ref_price),
+            "risk_bp": f.bp(reg.risk_bp),
+            "risk_atr": f.ratio(reg.risk_atr),
+            "reward_bp": f.bp(reg.reward_bp),
+            "reward_atr": f.ratio(reg.reward_atr),
+            "activation_distance_bp": f.bp(reg.activation_distance_bp),
+            "nearest_opposing_level": None if nearest is None else {
+                "level_id": nearest.level_id,
+                "boundary": f.price(nearest.boundary),
+                "distance_bp": f.bp(nearest.distance_bp),
+                "distance_atr": f.ratio(nearest.distance_atr),
+                "activation_inside_zone": nearest.activation_inside_zone,
+            },
+            "registration_lag_minutes": reg.registration_lag_minutes,
+            "params_changed_since_source": reg.params_changed_since_source,
+        },
+        "since_activation": None if since is None else {
+            "activation_time": format_time(since.activation_time),
+            "activation_price": f.price(since.activation_price),
+            "mfe_bp": f.bp(since.mfe_bp),
+            "mae_bp": f.bp(since.mae_bp),
+            "mfe_atr": f.ratio(since.mfe_atr),
+            "mae_atr": f.ratio(since.mae_atr),
+            "excursion_null_reason": since.excursion_null_reason,
+            "end_time": format_time(since.end_time),
+            "end_reason": since.end_reason.value if since.end_reason else None,
+            "end_price": f.price(since.end_price),
+            "bars_to_end": since.bars_to_end,
+        },
+        "co_conditions_at_activation": None if view.context is None else [
+            {"path": c.path, "equals": c.equals, "value": c.value, "met": c.met} for c in view.context.co_conditions
+        ],
+        "evaluation_gaps": [{"start": format_time(g.start_ms), "end": format_time(g.end_ms)} for g in ev.evaluation_gaps],
+    }

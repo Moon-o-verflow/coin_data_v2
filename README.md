@@ -36,6 +36,19 @@ python -m coindata summary --at 2026-05-29T12:05Z
 과거 시점 요약에서 그 시각에 아직 공개되지 않았을 수 있는 metrics 값에는 `possibly_unpublished_at_ref_time: true`가 붙는다. 외부 요청 없이 저장소만 읽으며, 같은 시각을 여러 번 만들어도 결과가 같다.
 여러 시점을 시간순으로 만들면 각 요약의 `state`가 바로 앞 시점 요약과 비교된다.
 
+판단 모델이 낸 조건을 추적하려면(조건 레지스트리, PRD 10.7):
+
+```
+python -m coindata plan add plan.json     # plan/1 JSON 등록. '-'이면 표준 입력
+python -m coindata plan list              # pending·active 계획 (--all이면 전체)
+python -m coindata plan cancel 20260925T123000Z/p1
+```
+
+등록 후에는 `summary`·`sync`가 실행될 때마다 저장된 1분봉으로 조건 충족 시각을 소급해 계산하고, 요약의 `plans` 섹션에 싣는다.
+- `close_above`/`close_below`는 해당 TF 종가의 돌파(직전 종가 ≤ X < 현재 종가)로 활성화된다. 등록 때 이미 넘어가 있으면 한 번 되돌아왔다가 다시 넘어야 한다.
+- 무효화·목표는 활성화 이후 처음으로 조건 너머에 닿은 시점이다. 같은 분에서는 touch 사건이 close 사건보다 먼저다.
+- 입력 형식은 PRD FR-7.1을 참조한다.
+
 코드를 갱신한 뒤:
 
 ```
@@ -96,6 +109,7 @@ coindata --help
 | `funding` | 펀딩비(bp)와 다음 펀딩까지 남은 분. 비용 정보다 |
 | `levels` | 기준 가격 위아래의 레벨 구간, 근거, 1h ATR로 정규화한 거리와 bp 거리, 터치 횟수. `level_id`는 그 요약 안에서만 유효하다 |
 | `events` | 보고 기간 안에서 판정된 이벤트와 측정값. `bars_ago`는 해당 `tf` 봉 기준 경과 봉 수 |
+| `plans` | 등록된 계획(조건 레지스트리)의 상태, 전이 시각, 등록 시 거리(bp·ATR), 활성화 이후 순행·역행 |
 | `state` | 직전 요약 대비 상태 변화, 파라미터 변경 여부 |
 | `gaps` | 계산 구간의 미해소 결측과 이번 실행의 취득 실패 |
 | `unavailable` | 이번 버전에서 제공하지 않는 데이터(청산, 체결 규모 분포, 통계) |
