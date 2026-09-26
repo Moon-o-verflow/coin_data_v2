@@ -2,7 +2,7 @@
 
 | 항목 | 내용 |
 |---|---|
-| 문서 버전 | 1.10 |
+| 문서 버전 | 1.11 |
 | 작성일 | 2026-09-24 |
 | 대상 시스템 | 바이낸스 USD-M 무기한 선물 ETH/USDT 판단 재료 생성기 |
 | 선행 버전 | coinDataMinning v2.1.3 |
@@ -20,6 +20,7 @@
 | 1.6 | 2단계 결정: 신선도를 실행 시각 기준으로 판정(FR-4.3), 요약 파일명·상태 비교 항목·`unavailable`·표기 규칙(FR-4.1~4.5), 경로 의존 계산의 고정 시작점(A.1.8), `compute`·`report` 설정 |
 | 1.7 | 부록 A v1.1: 돌파 대상을 유형별 최신 확정 스윙 하나로 한정(A.3.4), shock 시작의 효율성 변화 이벤트 중복 제거, 레벨 스윙 출처·정규화 TF 설정화, 5m·평활 TF 이벤트의 `tf`·`bars_ago` 기준 명시 |
 | 1.8 | 과거 시점 요약 `summary --at`(FR-4.8), `summary_log.trigger`에 `historical` 추가(스키마 버전 2), 요약 출력 단위 보완(FR-4.1) |
+| 1.11 | CR-2.1 조건 레지스트리와 소급 평가(10.7, FR-7.x), `plan`·`plan_state_log` 테이블(저장소 스키마 버전 5), 요약 섹션 `plans`, `plan` 명령. 13장의 판단 로그 중 조건 추적을 범위 안으로 이동 |
 | 1.10 | CR-2 첫 묶음, 부록 A v1.3, 요약 스키마 v2: 스윙 비교 허용 오차(A.3.3), 마지막 돌파(A.3.4), 진행 파동 되돌림(A.3.5), 4분면 3×3·분포 불감대·지속 조건(A.5.1), 비율·프리미엄 1분 백분위(A.5.2, A.5.4), 레벨 식별자·bp 거리·터치 횟수(A.7.4, A.7.5), 체결 흐름 계열 `flow`(A.12), 방향 서술 필드, 과거 모드 필드별 공개 지연 표시, 출력 정리. 저장소 스키마 버전 4 |
 | 1.9 | 부록 A v1.2: `quadrant_change`를 확정 4분면 사이의 변화로 한정(A.8.3). 결손 분류 `awaiting_archive` 추가(12.2, 스키마 버전 3). 캔들 비율·ATR 배수의 null 사유 표기(FR-4.2) |
 
@@ -77,7 +78,7 @@ RSI·MACD·볼린저밴드·이동평균은 모두 종가에서 파생되어 상
 | 결함 | 대응 요구사항 |
 |---|---|
 | P-1 | 모든 수치 계산을 프로그램이 수행 (FR-3.x) |
-| P-2 | 요약에 직전 요약 상태를 포함 (FR-4.4). **부분 대응**: LLM의 판단 자체는 저장하지 않는다(판단 로그는 13장 범위 밖) |
+| P-2 | 요약에 직전 요약 상태를 포함 (FR-4.4). 판단이 낸 조건(계획)은 조건 레지스트리로 저장·추적한다(10.7). 서술형 판단 자체는 저장하지 않는다 |
 | P-3 | 이벤트에 발생 여부뿐 아니라 진행 정도를 포함 (FR-3.12) |
 | P-4 | 프리미엄 인덱스 1분, 미결제약정 5분 주기 사용 (FR-1.3, FR-1.4) |
 | P-5 | 지표를 계열로 분류하여 출력 (FR-3.13) |
@@ -259,7 +260,7 @@ RSI·MACD·볼린저밴드·이동평균은 모두 종가에서 파생되어 상
 | 후속 기능 | 삽입 계층 |
 |---|---|
 | 실시간 체결/청산 수집 | ingest, store |
-| 판단 로그 및 결과 라벨링 | store, report |
+| 판단 서술 로그와 결과 라벨링 (조건 추적은 10.7에서 구현) | store, report |
 | base rate 통계 | compute (신규 모듈) |
 | 이벤트 감지 및 알림 | compute와 report 사이 |
 
@@ -492,6 +493,36 @@ SQLite 단일 파일을 사용한다.
 | file_path | TEXT | |
 | params | TEXT | 사용된 파라미터 원문 JSON (저장소 스키마 버전 4부터, FR-4.1 `params_diff`) |
 
+**plan** (저장소 스키마 버전 5, 10.7)
+
+| 컬럼 | 타입 | 비고 |
+|---|---|---|
+| plan_key | TEXT | 기본키. `<source_summary_id>/<plan_id>` |
+| source_summary_id | TEXT | 등록 기준 요약 |
+| spec | TEXT | 입력 원문 JSON(`plan/1`의 계획 하나) |
+| registered_at | INTEGER | 등록 시각(실행 시계) |
+| expires_at | INTEGER | 만료 시각 |
+| cancelled_at | INTEGER | 취소 시각. 없으면 NULL |
+| at_registration | TEXT | 등록 시 계산값 JSON (FR-7.5) |
+| activation_context | TEXT | 활성화 시점 계산값 JSON(활성화 시각, ATR, 동시 조건 결과). 활성화 시각이 바뀌면 다시 계산 |
+| state | TEXT | 마지막 평가의 상태 |
+| evaluation | TEXT | 마지막 평가 결과 JSON(`evaluation_gaps`, `since_activation`) |
+| evaluated_at | INTEGER | 마지막 평가 시각 |
+
+**plan_state_log**
+
+| 컬럼 | 타입 | 비고 |
+|---|---|---|
+| plan_key | TEXT | |
+| seq | INTEGER | 전이 순번. `(plan_key, seq)` 기본키 |
+| state | TEXT | 전이 후 상태 |
+| time | INTEGER | 사건 시각 |
+| price | REAL | 사건 가격(종가 또는 조건 가격) |
+| gap_before | INTEGER | 직전 전이 이후 평가 결측이 있었는지 |
+| evaluated_at | INTEGER | 이 전이를 계산한 평가 시각 |
+
+`plan_state_log`는 파생 테이블이다. 매 평가(FR-7.4)마다 1분봉에서 처음부터 다시 계산해 계획별로 교체한다.
+
 ### 9.3 스키마 원칙
 
 - 모든 시계열 테이블은 `(symbol, 시각)` 복합 기본키를 가진다. 중복 적재는 기본키 충돌로 차단된다.
@@ -691,7 +722,7 @@ ATR 기반 ZigZag로 스윙 고점·저점을 식별한다. 반전 임계값은 
 ### 10.5 인터페이스 (CLI)
 
 **FR-5.1 명령 구성**
-`init`, `sync`, `summary`, `status` 네 개의 하위 명령을 제공한다.
+`init`, `sync`, `summary`, `status`, `plan` 하위 명령을 제공한다.
 
 | 명령 | 대응 플로우 |
 |---|---|
@@ -699,6 +730,7 @@ ATR 기반 ZigZag로 스윙 고점·저점을 식별한다. 반전 임계값은 
 | `sync` | UF-2 증분 수집 (수동 또는 선택적 스케줄) |
 | `summary` | UF-3 수동 요약. `--at <UTC 시각>`이면 과거 시점 요약(FR-4.8) |
 | `status` | UF-4 상태 점검 |
+| `plan add` / `plan list` / `plan cancel` | 조건 레지스트리 (10.7) |
 
 **FR-5.2 종료 코드**
 정상 종료 0, 부분 실패 1, 실행 불가 2를 반환한다. 스케줄러가 결과를 판별할 수 있어야 한다. 부분 실패는 **이번 실행에서** 데이터 취득에 실패한 경우만 해당한다. 원본 자체의 결측(`source_gap`)이나 이전부터 있던 미해소 결측은 부분 실패로 보지 않는다.
@@ -706,10 +738,98 @@ ATR 기반 ZigZag로 스윙 고점·저점을 식별한다. 반전 임계값은 
 **FR-5.3 진행 표시**
 `init`은 장시간 실행되므로 진행 상황을 출력한다. `sync`는 비대화형 실행을 전제로 출력을 최소화한다.
 
+### 10.7 조건 레지스트리 (plan)
+
+판단 모델이 낸 조건을 기계 판독 가능한 JSON으로 받아 저장하고, 이후 `summary`·`sync` 실행 때 저장된 1분봉으로 **소급 평가**한다. 요약 사이의 공백에서 조건이 언제 충족·무효화되었는지, 진입 위치의 거리 관계가 어땠는지를 프로그램이 계산해 준다. 방향이나 확률을 판정하지 않는다. `side`는 사용자 입력을 되돌려 주는 값이며 프로그램이 판정한 값이 아니다(R-2, 금지어 검사를 예외 없이 통과한다).
+
+**FR-7.1 입력 형식 (`plan/1`)**
+
+```json
+{
+  "schema": "plan/1",
+  "source_summary_id": "20260925T123000Z",
+  "plans": [{
+    "plan_id": "p1",
+    "side": "long",
+    "activation":   {"kind": "close_above", "tf": "15m", "price": 2711.27},
+    "invalidation": {"kind": "close_below", "tf": "15m", "price": 2691.70},
+    "objective":    {"kind": "touch_above", "price": 2742.66},
+    "co_conditions": [{"path": "quadrant.1h", "equals": "oi_up_price_up"}],
+    "expires_at": null
+  }]
+}
+```
+
+- `side` ∈ `long`/`short`. `kind` ∈ `close_above`, `close_below`(`tf` 필수, 계산 대상 TF), `touch_above`, `touch_below`(1분봉 고가·저가, `tf` 없음).
+- `objective`, `co_conditions`, `expires_at`은 선택이다. `expires_at`(UTC `YYYY-MM-DDTHH:MMZ`)이 없으면 등록 기준 요약의 `ref_time` + `plans.default_ttl_hours`.
+- 식별자: `plan_key = "<source_summary_id>/<plan_id>"`. 같은 키가 있으면 거부한다.
+
+**FR-7.2 등록 검증 (`plan add`)**
+오류는 필드 단위로 보고하며, 오류가 있는 계획은 등록하지 않는다.
+- `source_summary_id`가 `summary_log`에 있어야 한다.
+- 가격 순서: `long`은 invalidation < activation < objective, `short`는 invalidation > activation > objective. 어긋나면 거부한다.
+- `touch_*` 조건(activation, objective)이 등록 기준 요약의 `ref_price`에서 이미 충족되어 있으면 거부한다.
+- `co_conditions.path`는 FR-4.4 `state` 항목만 받는다: `timeframes.<tf>.efficiency_state`, `timeframes.<tf>.volatility_state`, `timeframes.<tf>.structure_state`, `quadrant.<period>`. 쿼리 문법은 없다.
+
+**FR-7.3 평가 규칙**
+- 범위: 등록 기준 요약의 `ref_time` 이후 1분봉을 1분씩 순서대로 본다. 등록 시각이 요약보다 늦어도 요약 시점부터 소급한다. 현재 시점 평가는 마지막 저장 1분봉까지, 과거 시점 요약(FR-4.8)은 그 요약의 `ref_time`까지다.
+- 사건 시각: `touch_*` 사건은 그 1분봉 안에서, `close_*` 사건은 해당 TF 봉의 마지막 1분봉 종료 시점에 일어난다. 따라서 **같은 분에서는 touch 사건을 close 사건보다 먼저 처리한다.** 사건 시각은 touch는 그 1분봉의 open_time, close는 TF 봉의 `close_time + 1`로 기록한다.
+- `ambiguous`: 같은 분에 서로 다른 touch 사건 둘이 충족되거나, 서로 다른 TF의 close 사건 둘이 같은 분 종료 시점에 충족될 때만 쓴다. pending 중(activation·invalidation, 그리고 touch 활성화와 같은 분의 objective touch)과 active 중(invalidation·objective)에 모두 적용한다.
+- touch로 활성화된 분의 종료 시점 close 사건은 활성화 이후 사건으로 평가한다(예: touch 활성화 + 같은 분 close 무효화 → active 후 invalidated). close로 활성화된 분의 touch 사건은 활성화 이전이므로 활성화 이후 평가에 쓰지 않는다.
+- **activation (돌파 기준)**: `close_above`는 `C_{t−1} ≤ X < C_t`, `close_below`는 `C_{t−1} ≥ X > C_t`. 첫 평가 TF 봉은 `ref_time` 이후에 마감하는 첫 봉이고, 그 `C_{t−1}`은 `ref_time` 시점의 마지막 마감 TF 봉 종가다. 등록 시 이미 X 너머에 있으면 한 번 되돌아왔다가 다시 넘어야 발동한다.
+- **invalidation, objective (상태 기준)**: 활성화 이후(pending 중의 invalidation 포함) 처음으로 `C_t < X`(close_below), `C_t > X`(close_above), `High ≥ X`(touch_above), `Low ≤ X`(touch_below)가 되는 시점.
+- **결측**: 빠진 1분봉에서는 touch를 판정하지 않는다. 결측 분이 있는 TF 봉은 close 판정에 쓰지 않는다. 돌파 판정은 `C_{t−1}`과 `C_t`가 모두 결측 없는 TF 봉일 때만 하며, 직전 봉이 결측이면 그 다음 봉에서는 판정하지 않고 두 연속 유효 봉이 나오는 시점부터 재개한다. 상태 기준 판정은 결측 봉만 건너뛴다. 건너뛴 구간은 `evaluation_gaps`에 기록하고, 직전 전이(없으면 평가 시작) 이후 결측이 있었던 전이에 `gap_before: true`를 붙인다. 결측을 채우지 않는다(R-3).
+- **만료·취소**: `expires_at`에 도달했을 때 pending이면 `expired`, active면 `expired_active`. `plan cancel`은 pending 계획만 `cancelled`로 바꾸며 취소 시각에 적용한다. 과거 시점 요약에서는 취소 시각이 그 요약의 `ref_time` 이후면 적용하지 않는다.
+
+상태 전이:
+
+```
+pending ──(activation)──────────────→ active
+pending ──(invalidation 선충족)────→ void_before_activation
+pending ──(만료)────────────────────→ expired
+pending ──(취소)────────────────────→ cancelled
+active  ──(invalidation)───────────→ invalidated
+active  ──(objective)──────────────→ objective_reached
+active  ──(만료)────────────────────→ expired_active
+(순서를 알 수 없음) ─────────────────→ ambiguous
+```
+
+**FR-7.4 평가 시점과 저장**
+- `summary`(현재 시점)와 `sync`가 끝난 뒤 모든 미종료 계획과 최근 종료 계획을 1분봉에서 **처음부터 다시 평가**하고 `plan.state`, `plan.evaluation`, `plan_state_log`를 교체한다. 늦게 채워진 결측이 자동으로 반영된다. 결측이 채워지면 전이 시각이 바뀔 수 있으므로 `evaluated_at`을 남긴다.
+- 과거 시점 요약은 저장하지 않고 그 `ref_time`까지 메모리에서 평가한다. 대상은 등록 기준 요약의 `ref_time`이 그 요약의 `ref_time`보다 앞선 계획이다.
+
+**FR-7.5 계산 필드**
+- `at_registration`(등록 기준 요약의 `ref_time`에서 엔진을 다시 계산해 얻는다. 반올림 전 값을 쓴다)
+  - `risk_bp = |activation − invalidation| / activation × 10000`, `risk_atr = |activation − invalidation| / ATR`
+  - `reward_bp`, `reward_atr`: objective가 있으면 같은 방식, 없으면 `null`
+  - ATR은 `levels.normalize_tf`의 마지막 마감 봉 ATR(A.7.2)
+  - `activation_distance_bp = (activation − ref_price) / ref_price × 10000`
+  - `nearest_opposing_level`: long이면 `zone_high > activation`인 레벨 중 가까운 경계 `max(zone_low, activation)`까지 거리가 가장 짧은 레벨(short는 대칭). `level_id`, `boundary`, `distance_bp`, `distance_atr`, `activation_inside_zone`. 해당 레벨이 없으면 `null`
+  - `registration_lag_minutes`: 등록 시각 − 등록 기준 요약의 `ref_time`(분). 판단 시점과 등록 시점의 괴리
+  - `params_changed_since_source`: 등록 기준 요약과 현재 파라미터 해시가 다르면 `true`
+- `since_activation`
+  - `activation_time`, `activation_price`(close는 종가, touch는 조건 가격)
+  - `mfe_bp`·`mae_bp`: 활성화 분 다음 분부터 종료 분(미종료면 마지막 평가 분)까지 1분봉 고가·저가로 잰 최대 순행·역행(0 미만이면 0). 범위가 비었는데 종료되었으면 종료 가격으로 잰다. 범위가 비었고 미종료면 `null`
+  - `mfe_atr`·`mae_atr`: 같은 거리 / 활성화 시점의 `levels.normalize_tf` ATR
+  - `end_time`, `end_reason`(종료 상태), `end_price`(close는 종가, touch는 조건 가격, 만료는 `null`)
+  - `bars_to_end`: activation TF 봉 수. touch 활성화는 분 수
+- `co_conditions_at_activation`: 활성화 시점으로 엔진을 다시 계산해 경로별 `value`와 `met`을 기록한다. 상태 전이를 막지 않는다.
+
+**FR-7.6 요약 섹션 `plans`**
+pending·active 계획과, 종료 시각이 기준 시각 전 `plans.report_hours` 안인 계획을 싣는다. 각 계획: `plan_key`, 입력 원문, `state`, 전이 이력(`state`, `time`, `price`, `gap_before`), `expires_at`, `at_registration`, `since_activation`, `co_conditions_at_activation`, `evaluation_gaps`. 시각은 UTC다.
+
+**FR-7.7 명령**
+
+| 명령 | 동작 |
+|---|---|
+| `plan add <파일 또는 ->` | 검증 후 등록. `plan_key`와 `at_registration`을 출력한다 |
+| `plan list [--all]` | 기본은 pending·active. `--all`은 전체 |
+| `plan cancel <plan_key>` | pending 계획을 `cancelled`로 |
+
 ### 10.6 설정
 
 **FR-6.1 설정 파일**
-모든 파라미터를 단일 설정 파일에서 관리한다. 형식은 TOML이며 표준 라이브러리 `tomllib`로 읽는다. 섹션 구분: `data`, `indicators`, `regime`, `derivatives`, `levels`, `events`, `compute`, `report`, `runtime`.
+모든 파라미터를 단일 설정 파일에서 관리한다. 형식은 TOML이며 표준 라이브러리 `tomllib`로 읽는다. 섹션 구분: `data`, `indicators`, `regime`, `derivatives`, `levels`, `events`, `compute`, `report`, `historical`, `plans`, `runtime`.
 
 **FR-6.2 기본값**
 모든 설정 항목은 기본값을 가지며, 설정 파일 없이도 실행 가능하다.
@@ -822,7 +942,7 @@ ATR 기반 ZigZag로 스윙 고점·저점을 식별한다. 반전 임계값은 
 | 거래량·OI 프로파일 | 레벨 강도 산출과 함께 구현 | compute |
 | 레벨 강도 점수 | 과거 반응 이력 필요 | compute |
 | MAE/MFE, base rate | 누적 데이터 필요 | compute (신규) |
-| 판단 로그 및 결과 라벨링 | 검증 1단계 이후 | store, report |
+| 판단 서술 로그와 결과 라벨링 (조건 추적은 10.7로 이동) | 검증 1단계 이후 | store, report |
 | 이벤트 감지 및 알림 | 유효 이벤트 식별 이후 | compute/report 사이 |
 | 실시간 수집기 | 별도 장비 구성 이후 | ingest |
 | 레짐 확신도 합성, 통합 취약성 지수 | 가중치 검증 데이터 부재 | compute |
@@ -1481,6 +1601,8 @@ TF별로 최근 `R_tf`개 마감 봉 안에서 발생한 이벤트만 보고한�
 | `report.digits_bp` | 2 | FR-4.1 |
 | `report.digits_pct` | 1 | FR-4.1 |
 | `report.digits_volume` | 3 | FR-4.1 |
+| `plans.default_ttl_hours` | 24 | FR-7.1 |
+| `plans.report_hours` | 48 | FR-7.6 |
 | `historical.publication_lag_minutes` | {taker_buy_sell_ratio: 10, 나머지 metrics 컬럼: 5} | FR-4.8 |
 
 ---
