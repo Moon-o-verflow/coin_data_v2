@@ -275,6 +275,68 @@ def _default_publication_lag() -> dict[str, int]:
 
 
 @dataclass(frozen=True, slots=True)
+class MaConfig:
+    periods: tuple[int, ...] = (5, 20, 60)  # A.13.1
+    kind: str = "sma"  # sma / ema
+    equal_tol_atr: float = 0.1
+
+
+@dataclass(frozen=True, slots=True)
+class RsiConfig:
+    n: int = 14  # A.13.2
+    equal_tol: float = 1.0  # A.13.5
+
+
+@dataclass(frozen=True, slots=True)
+class BbConfig:
+    n: int = 20  # A.13.3
+    k: float = 2.0
+    width_lookback: int = 100
+
+
+@dataclass(frozen=True, slots=True)
+class MacdConfig:
+    fast: int = 12  # A.13.4
+    slow: int = 26
+    signal: int = 9
+
+
+@dataclass(frozen=True, slots=True)
+class ReferenceConfig:
+    timeframes: tuple[str, ...] = ("15m", "1h")  # A.13
+    ma: MaConfig = field(default_factory=MaConfig)
+    rsi: RsiConfig = field(default_factory=RsiConfig)
+    bb: BbConfig = field(default_factory=BbConfig)
+    macd: MacdConfig = field(default_factory=MacdConfig)
+
+
+@dataclass(frozen=True, slots=True)
+class SessionWindow:
+    timezone: str  # IANA 시간대 (FR-4.9)
+    start: str  # 현지 HH:MM, 포함
+    end: str  # 현지 HH:MM, 미포함
+
+
+def _asia() -> SessionWindow:
+    return SessionWindow("Asia/Tokyo", "09:00", "18:00")
+
+
+def _europe() -> SessionWindow:
+    return SessionWindow("Europe/London", "08:00", "16:30")
+
+
+def _us() -> SessionWindow:
+    return SessionWindow("America/New_York", "09:30", "16:00")
+
+
+@dataclass(frozen=True, slots=True)
+class SessionsConfig:
+    asia: SessionWindow = field(default_factory=_asia)
+    europe: SessionWindow = field(default_factory=_europe)
+    us: SessionWindow = field(default_factory=_us)
+
+
+@dataclass(frozen=True, slots=True)
 class S1Config:
     horizon_bars: tuple[int, ...] = (4, 8)  # 부록 B.1.2. 바꾸면 정의 버전을 올린다
 
@@ -311,6 +373,8 @@ class Config:
     historical: HistoricalConfig = field(default_factory=HistoricalConfig)
     plans: PlansConfig = field(default_factory=PlansConfig)
     stats: StatsConfig = field(default_factory=StatsConfig)
+    reference: ReferenceConfig = field(default_factory=ReferenceConfig)
+    sessions: SessionsConfig = field(default_factory=SessionsConfig)
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +518,7 @@ def _validate_timeframes(config: Config) -> list[str]:
         "levels.swing_timeframes": config.levels.swing_timeframes,
         "levels.normalize_tf": (config.levels.normalize_tf,),
         "levels.touch_tf": (config.levels.touch_tf,),
+        "reference.timeframes": config.reference.timeframes,
         "derivatives.quadrant.periods": config.derivatives.quadrant.periods,
         "derivatives.premium.windows": config.derivatives.premium.windows,
         "derivatives.premium.smoothing_tf": (config.derivatives.premium.smoothing_tf,),
@@ -470,6 +535,7 @@ def _validate_timeframes(config: Config) -> list[str]:
         "levels.swing_timeframes",
         "levels.normalize_tf",
         "levels.touch_tf",
+        "reference.timeframes",
     ):
         outside = [tf for tf in groups[key] if tf not in timeframes]
         if outside:
@@ -511,6 +577,19 @@ def _validate_windows(config: Config) -> list[str]:
             f"stats.s1.horizon_bars {list(horizons)}가 부록 B에 등록된 {S1_CURRENT_VERSION}의 값 {list(registered)}와 다르다. "
             "판정 기간을 바꾸려면 부록 B에 새 정의 버전을 등록하고 버전을 올려야 한다"
         )
+    ref = config.reference
+    if ref.ma.kind not in ("sma", "ema"):
+        problems.append("reference.ma.kind: sma 또는 ema여야 한다")
+    if not ref.ma.periods or min(ref.ma.periods) < 1 or list(ref.ma.periods) != sorted(set(ref.ma.periods)):
+        problems.append("reference.ma.periods: 1 이상의 서로 다른 정수를 오름차순으로 적어야 한다")
+    if min(ref.rsi.n, ref.bb.n, ref.bb.width_lookback, ref.macd.fast, ref.macd.signal) < 1 or ref.macd.fast >= ref.macd.slow:
+        problems.append("reference.rsi/bb/macd: 기간은 1 이상이고 macd.fast < macd.slow여야 한다")
+    if min(ref.ma.equal_tol_atr, ref.rsi.equal_tol, ref.bb.k) < 0:
+        problems.append("reference.*: 허용 오차와 밴드 폭은 0 이상이어야 한다")
+    for name in ("asia", "europe", "us"):
+        window = getattr(config.sessions, name)
+        if not window.timezone or not (_is_hhmm(window.start) and _is_hhmm(window.end)) or window.start >= window.end:
+            problems.append(f"sessions.{name}: timezone과 HH:MM 형식의 start < end가 필요하다")
     if config.stats.min_n < 1:
         problems.append("stats.min_n: 1 이상이어야 한다")
     if min(config.plans.default_ttl_hours, config.plans.report_hours) < 1:
@@ -520,3 +599,11 @@ def _validate_windows(config: Config) -> list[str]:
     if any(v < 0 for v in config.historical.publication_lag_minutes.values()):
         problems.append("historical.publication_lag_minutes: 0 이상이어야 한다")
     return problems
+
+
+def _is_hhmm(text: str) -> bool:
+    parts = text.split(":")
+    return (
+        len(parts) == 2 and all(len(p) == 2 and p.isdigit() for p in parts)
+        and int(parts[0]) < 24 and int(parts[1]) < 60
+    )

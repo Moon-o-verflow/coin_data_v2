@@ -23,8 +23,10 @@ from coindata.compute.levels import (
     touch_stats,
     window_stats,
 )
+from coindata.compute.reference import ReferenceResult, reference
 from coindata.compute.regime import SHOCK, duration, efficiency_state, shock, volatility_state
 from coindata.compute.stats import S1_CONTEXT_TF, S1_TF, S1Result, s1
+from coindata.compute.session import SessionResult, session
 from coindata.compute.series import ZERO_DENOMINATOR, BarSeries, Measured, measure, parse_tf, synthesize
 from coindata.compute.structure import (
     Break,
@@ -127,6 +129,8 @@ class Analysis:
     derivatives: DerivativesResult
     events: tuple[ev.Event, ...]  # 전체 이벤트, bar_time 순
     s1: S1Result | None  # 부록 B.1. 15m 또는 1h가 계산 대상이 아니면 None
+    reference: tuple[ReferenceResult, ...]  # A.13, reference.timeframes 순서
+    session: SessionResult  # FR-4.9
 
 
 # ---------------------------------------------------------------------------
@@ -244,9 +248,16 @@ def analyze(inp: ComputeInput, config: Config) -> Analysis:
             m15.series, m15.breaks, m15.atr_values, m15.volatility_states, h1.series, h1.efficiency_states,
             config.stats.s1.horizon_bars, config.stats.min_n,
         )
+    ref_results = tuple(
+        reference(
+            per_tf[tf].series, per_tf[tf].atr_values, per_tf[tf].zigzag.swings, ref_price, config.reference,
+            config.indicators.structure.equal_tol_atr,
+        )
+        for tf in config.reference.timeframes
+    )
     return Analysis(
         inp.symbol, inp.anchor_ms, inp.ref_time, ref_price, tuple(results), stats, level_result, touches, derivatives,
-        tuple(events), s1_result,
+        tuple(events), s1_result, ref_results, session(inp.ref_time, config.sessions),
     )
 
 

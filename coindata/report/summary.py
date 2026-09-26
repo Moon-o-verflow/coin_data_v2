@@ -18,6 +18,8 @@ from coindata.compute import events as ev
 from coindata.compute.engine import Analysis, TfAnalysis
 from coindata.compute import stats as st
 from coindata.compute.flow import FlowResult
+from coindata.compute.reference import Divergence, ReferenceResult
+from coindata.compute.session import SessionResult
 from coindata.compute.levels import Level, TouchStats, distance_bp
 from coindata.compute.series import Measured
 from coindata.config import Config, ReportConfig
@@ -157,6 +159,8 @@ def parameters(config: Config, anchor_ms: int) -> dict[str, Any]:
         "derivatives": dataclasses.asdict(config.derivatives),
         "levels": dataclasses.asdict(config.levels),
         "events": dataclasses.asdict(config.events),
+        "reference": dataclasses.asdict(config.reference),
+        "sessions": dataclasses.asdict(config.sessions),
         "anchor_time": format_time(anchor_ms),
     }
 
@@ -235,6 +239,7 @@ def build_summary(ctx: SummaryContext) -> BuiltSummary:
         "regime": {"timeframes": [_regime(tf, f) for tf in a.timeframes]},
         "derivatives": _derivatives(ctx, f),
         "flow": {"timeframes": [_flow(tf.tf, tf.flow, f) for tf in a.timeframes]},
+        "reference": {"timeframes": [_reference(r, f) for r in a.reference]},
         "funding": _funding(ctx, historical, f),
         "levels": _levels(a, ctx.config, f),
         "events": [_event(e, f) for e in a.events],
@@ -287,6 +292,7 @@ def _meta(ctx: SummaryContext, f: _Fmt, params: Mapping[str, Any], hashed: str) 
         "current_price": current,
         "schema_version": SUMMARY_SCHEMA_VERSION,
         "anchor_time": format_time(a.anchor_ms),
+        "session": _session(a.session),
         "historical": historical,
         "params_hash": hashed,
         **_params_fields(ctx, params, hashed),
@@ -527,6 +533,43 @@ def _flow(tf: str, fl: FlowResult, f: _Fmt) -> dict[str, Any]:
         "imbalance_pct": f.measured(fl.imbalance_pct, "pct"),
         "delta_ema": f.measured(fl.delta_ema, "volume"),
     }
+
+
+def _session(se: SessionResult) -> dict[str, Any]:
+    """FR-4.9. 시계 기준 표시이며 휴장일을 반영하지 않는다."""
+    return {"label": se.label, "active": list(se.active), "null_reason": se.null_reason}
+
+
+def _reference(r: ReferenceResult, f: _Fmt) -> dict[str, Any]:
+    """A.13. 판단의 근거 수에 세지 않는 참조 지표다(FR-3.13)."""
+    bb, macd = r.bollinger, r.macd
+    return {
+        "tf": r.tf,
+        "ma": {
+            "order": r.ma_order,
+            "values": [
+                {"period": m.period, **f.measured(m.value, "price"), "distance_bp": f.bp(m.distance_bp)} for m in r.ma
+            ],
+        },
+        "rsi": f.measured(r.rsi, "pct"),
+        "bollinger": {
+            "upper": f.price(bb.upper),
+            "lower": f.price(bb.lower),
+            "percent_b": f.measured(bb.percent_b, "ratio"),
+            "width": f.measured(bb.width, "ratio"),
+            "width_pct": f.measured(bb.width_pct, "pct"),
+        },
+        "macd": {
+            "histogram": f.measured(macd.histogram, "price"),
+            "histogram_side": macd.histogram_side,
+            "bars_since_side_change": macd.bars_since_side_change,
+        },
+        "rsi_divergence": {"highs": _divergence(r.divergence_highs), "lows": _divergence(r.divergence_lows)},
+    }
+
+
+def _divergence(d: Divergence | None) -> dict[str, Any] | None:
+    return None if d is None else {"relation": d.relation, "known_time": format_time(d.known_time)}
 
 
 def _funding(ctx: SummaryContext, historical: bool, f: _Fmt) -> dict[str, Any]:

@@ -58,7 +58,7 @@ python -m coindata summary       # 저장소 스키마가 바뀌었으면 첫 �
 
 ## 준비
 
-- Python 3.11 이상. 외부 패키지는 쓰지 않는다.
+- Python 3.11 이상. 외부 패키지는 쓰지 않는다. 단, Windows에서는 세션 표시(`meta.session`)에 쓰는 시간대 데이터가 없으므로 `pip install tzdata`가 필요하다(`pip install -e .`로 설치하면 자동으로 설치된다). 없으면 `meta.session.label`이 `null`, 사유 `timezone_data_unavailable`로 나오고 나머지는 그대로 동작한다.
 - 인증이 필요 없는 공개 데이터만 쓰므로 API 키가 필요 없다.
 
 저장소 루트에서 바로 실행할 수 있다.
@@ -100,12 +100,13 @@ coindata --help
 
 | 섹션 | 내용 |
 |---|---|
-| `meta` | 요약 ID, 기준 시각(`ref_time`)과 기준 가격, 현재가(진행 중인 봉, `is_closed: false`), 파라미터 해시와 직전 요약 대비 변경분(`params_diff`), 시작점(`anchor_time`) |
+| `meta` | 요약 ID, 기준 시각(`ref_time`)과 기준 가격, 현재가(진행 중인 봉, `is_closed: false`), 파라미터 해시와 직전 요약 대비 변경분(`params_diff`), 시작점(`anchor_time`), 세션(`session`: `asia`/`europe`/`us`, 겹치면 `overlap_europe_us` 등, 아니면 `off_session`. 도쿄·런던·뉴욕 현지 시각 기준이라 서머타임이 반영되고 휴장일은 반영하지 않는다) |
 | `data_freshness` | 실행 시각 대비 데이터셋별 경과 분과 경고(`stale`). 과거 시점 요약은 판정하지 않는다 |
 | `price_structure` | TF별 ATR, 구조 상태와 고점·저점 관계(`higher`/`lower`/`equal`), 마지막 돌파, 최근 스윙 6개, 잠정 파동, 되돌림(확정 파동·진행 파동), 최근 캔들 5개, 진행 중인 봉. 가격마다 `ref_price` 대비 bp 거리 |
 | `regime` | TF별 효율성 상태(`er_direction` 포함)와 변동성 상태, 각각의 지속 봉 수와 원값 |
 | `derivatives` | 프리미엄(bp, 1분 값 백분위, 변화량, 15분 평활 백분위), 계약 수 OI와 4분면(확정 상태·원시 상태·지속), 롱숏·taker 비율과 백분위 |
 | `flow` | TF별 마지막 마감 봉의 taker 매수·매도 체결량, 델타, 불균형과 백분위, 델타 EMA. 공격적 체결 방향만 나타내며 OI의 롱·숏 구성은 나타내지 않는다 |
+| `reference` | 15m·1h의 참조 지표: MA(5·20·60, 배열 `fast_above_slow`/`fast_below_slow`/`mixed`), RSI(14), 볼린저 밴드(20, 2), MACD 히스토그램과 부호 전환 이후 봉 수, RSI 다이버전스(최근 두 스윙의 가격·RSI 관계). 차트 리딩을 확인하는 용도이며 **판단의 근거 수에 세지 않는다** |
 | `funding` | 펀딩비(bp)와 다음 펀딩까지 남은 분. 비용 정보다 |
 | `levels` | 기준 가격 위아래의 레벨 구간, 근거, 1h ATR로 정규화한 거리와 bp 거리, 터치 횟수. `level_id`는 그 요약 안에서만 유효하다 |
 | `events` | 보고 기간 안에서 판정된 이벤트와 측정값. `bars_ago`는 해당 `tf` 봉 기준 경과 봉 수 |

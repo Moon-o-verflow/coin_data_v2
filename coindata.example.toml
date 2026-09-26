@@ -137,3 +137,31 @@ min_n = 30                         # 버킷 표본이 이보다 적으면 비율
 
 [stats.s1]
 horizon_bars = [4, 8]             # 돌파 유지 판정 기간(15m 봉). 바꾸면 정의 버전 변경 (부록 B.1.2)
+
+[reference]
+timeframes = ["15m", "1h"]        # 참조 지표 대상 TF. 근거로 세지 않는다 (A.13)
+
+[reference.ma]
+periods = [5, 20, 60]
+kind = "sma"                      # sma / ema
+equal_tol_atr = 0.1               # 인접 MA 차가 이 × ATR 미만이면 같음 (A.13.1)
+
+[reference.rsi]
+n = 14
+equal_tol = 1.0                   # 다이버전스 RSI 비교 허용 오차 (A.13.5)
+
+[reference.bb]
+n = 20
+k = 2.0
+width_lookback = 100
+
+[reference.macd]
+fast = 12
+slow = 26
+signal = 9
+
+[sessions]
+# 현지 시각과 IANA 시간대. 서머타임이 자동 반영된다 (FR-4.9)
+asia = { timezone = "Asia/Tokyo", start = "09:00", end = "18:00" }
+europe = { timezone = "Europe/London", start = "08:00", end = "16:30" }
+us = { timezone = "America/New_York", start = "09:30", end = "16:00" }

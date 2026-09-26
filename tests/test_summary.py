@@ -21,7 +21,7 @@ from tests.fakes import FUNDING_RATE, ms
 from tests.test_cli import D21, CliTestCase
 
 SECTIONS = (
-    "meta", "data_freshness", "price_structure", "regime", "derivatives", "flow", "funding",
+    "meta", "data_freshness", "price_structure", "regime", "derivatives", "flow", "reference", "funding",
     "levels", "events", "plans", "state", "statistics", "gaps", "unavailable",
 )
 # CLAUDE.md R-2 금지어 목록
@@ -127,6 +127,15 @@ class LiveSummaryTest(SummaryTestCase):
                 self.assertIsNone(b["held_ratio"])
                 self.assertEqual(b["null_reason"], "insufficient_sample")
         self.assertEqual({u["item"] for u in doc["unavailable"]}, {"liquidation", "trade_size_distribution"})
+        # 참조 지표와 세션 (A.13, FR-4.9)
+        ref = doc["reference"]["timeframes"]
+        self.assertEqual([r["tf"] for r in ref], ["15m", "1h"])
+        self.assertEqual([m["period"] for m in ref[0]["ma"]["values"]], [5, 20, 60])
+        self.assertEqual(
+            set(ref[0]), {"tf", "ma", "rsi", "bollinger", "macd", "rsi_divergence"}
+        )
+        self.assertEqual(set(meta["session"]), {"label", "active", "null_reason"})
+        self.assertIsNotNone(meta["session"]["label"])
         # 스키마 v2 (CR-2)
         self.assertEqual(meta["schema_version"], "2")
         self.assertNotIn("params", meta)
