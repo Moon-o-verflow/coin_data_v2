@@ -10,7 +10,8 @@ from pathlib import Path
 PACKAGE = Path(__file__).resolve().parent.parent / "coindata"
 
 ALLOWED: dict[str, set[str]] = {
-    "entry": {"cli"},
+    "entry": {"cli", "gui"},
+    "gui": {"gui", "cli", "config", "models"},
     "cli": {"cli", "report", "compute", "store", "ingest", "config", "models"},
     "report": {"report", "compute", "store", "config", "models"},
     "compute": {"compute", "store", "config", "models"},

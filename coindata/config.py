@@ -354,6 +354,12 @@ class PlansConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class GuiConfig:
+    summary_list_limit: int = 50  # FR-8.3: 최근 요약 목록에 보여줄 개수
+    poll_ms: int = 100  # FR-8.4: 작업 스레드 결과를 화면에 옮기는 주기
+
+
+@dataclass(frozen=True, slots=True)
 class HistoricalConfig:
     # FR-4.8: 과거 시점 요약에서 공개 지연 가능성을 표시할 필드별 지연(분).
     publication_lag_minutes: dict[str, int] = field(default_factory=_default_publication_lag)
@@ -375,6 +381,7 @@ class Config:
     stats: StatsConfig = field(default_factory=StatsConfig)
     reference: ReferenceConfig = field(default_factory=ReferenceConfig)
     sessions: SessionsConfig = field(default_factory=SessionsConfig)
+    gui: GuiConfig = field(default_factory=GuiConfig)
 
 
 # ---------------------------------------------------------------------------
@@ -459,6 +466,10 @@ def _validate(config: Config) -> None:
         problems.append("data.symbol: 대문자 영숫자여야 한다")
     if data.init_days < 1:
         problems.append("data.init_days: 1 이상이어야 한다")
+    if config.gui.summary_list_limit < 1:
+        problems.append("gui.summary_list_limit: 1 이상이어야 한다")
+    if config.gui.poll_ms < 1:
+        problems.append("gui.poll_ms: 1 이상이어야 한다")
     if data.archive_publish_delay_days < 0:
         problems.append("data.archive_publish_delay_days: 0 이상이어야 한다")
     if data.refill_window_days < 0:

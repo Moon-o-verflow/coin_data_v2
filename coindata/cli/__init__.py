@@ -1,6 +1,7 @@
 """명령행 인터페이스 (PRD FR-5.1 ~ FR-5.3).
 
-명령: `init`(UF-1), `sync`(UF-2), `summary`(UF-3, `--at`이면 과거 시점 요약), `status`(UF-4).
+명령: `init`(UF-1), `sync`(UF-2), `summary`(UF-3, `--at`이면 과거 시점 요약), `status`(UF-4), `plan`(10.7), `gui`(10.8).
+명령 처리는 `service`가 하고, 여기서는 인자를 해석해 결과를 출력한다(FR-8.2).
 종료 코드: 0 정상, 1 부분 실패(이번 실행의 데이터 취득 실패), 2 실행 불가(FR-5.2).
 CLI 출력은 표준 출력, 로그는 표준 오류로 분리한다(CLAUDE.md C-6).
 """
@@ -9,56 +10,41 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sqlite3
 import sys
 import time
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from coindata.cli.flows import IngestFlow, RunReport, run_init, run_sync
-from coindata.cli.lock import LockError, ProcessLock
-from coindata.cli.plan import PlanInputError, add_plans, cancel
-from coindata.cli.plan_eval import refresh_plans
-from coindata.cli.status import render_plan_list, render_status
-from coindata.cli.summary import SummaryError, parse_at, run_summary
-from coindata.config import API_LIMITS, Config, ConfigError, load_config
-from coindata.ingest.archive import ArchiveClient
-from coindata.ingest.http import (
-    Clock,
-    HttpTransport,
-    RequestExecutor,
-    RetryPolicy,
-    Sleeper,
-    SystemClock,
-    SystemSleeper,
-    UrllibTransport,
+from coindata.cli.flows import RunReport
+from coindata.cli.service import (
+    DEFAULT_CONFIG_NAME,
+    EXIT_CANNOT_RUN,
+    EXIT_OK,
+    EXIT_PARTIAL,
+    CommandError,
+    IngestOutcome,
+    Paths,
+    Runtime,
+    build_clients,
+    default_runtime,
+    load,
+    make_summary,
+    plan_add,
+    plan_cancel,
+    plan_list,
+    run_ingest,
+    status_report,
 )
-from coindata.ingest.ratelimit import RequestCountLimiter, WeightLimiter
-from coindata.ingest.rest import BinanceRestClient
+from coindata.cli.status import render_plan_list
+from coindata.cli.summary import SummaryError, parse_at
+from coindata.config import Config, ConfigError
+from coindata.ingest.http import SystemClock
 from coindata.ingest.timeutil import format_ms
-from coindata.models import Dataset, RunMode, RunStatus
-from coindata.store import query, writer
-from coindata.store.db import StoreError, open_db
-from coindata.report.save import SummaryExistsError
-from coindata.store.schema import ensure_schema
+from coindata.models import RunMode, RunStatus
 
-logger = logging.getLogger(__name__)
-
-EXIT_OK = 0
-EXIT_PARTIAL = 1
-EXIT_CANNOT_RUN = 2
-
-DEFAULT_CONFIG_NAME = "coindata.toml"
-
-
-@dataclass(frozen=True, slots=True)
-class Runtime:
-    """외부 세계와 닿는 의존성. 테스트에서 교체한다(NFR-9.2)."""
-
-    transport: HttpTransport
-    clock: Clock
-    sleeper: Sleeper
+__all__ = [
+    "DEFAULT_CONFIG_NAME", "EXIT_CANNOT_RUN", "EXIT_OK", "EXIT_PARTIAL", "Runtime", "build_clients", "main",
+]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -88,143 +74,60 @@ def build_parser() -> argparse.ArgumentParser:
     plan_list.add_argument("--all", action="store_true", help="종료된 계획도 보여준다")
     plan_cancel = plan_commands.add_parser("cancel", help="pending 계획을 취소한다")
     plan_cancel.add_argument("plan_key", help="<source_summary_id>/<plan_id>")
+    commands.add_parser("gui", help="한 화면 GUI를 연다 (PRD 10.8)")
     return parser
 
 
-def main(argv: Sequence[str] | None = None, runtime: Runtime | None = None) -> int:
+GuiRunner = Callable[[Path | None], int]
+
+
+def main(argv: Sequence[str] | None = None, runtime: Runtime | None = None, gui_runner: GuiRunner | None = None) -> int:
+    """`gui_runner`는 진입점이 넘긴다. `cli`는 `gui`를 참조하지 않는다(7.2)."""
     args = build_parser().parse_args(argv)
     try:
-        config_path = _resolve_config_path(args.config)
-        config = load_config(config_path)
+        config, paths = load(args.config)
     except ConfigError as exc:
         print(f"설정 오류: {exc}", file=sys.stderr)
         return EXIT_CANNOT_RUN
     _setup_logging(config.runtime.log_level)
-    base_dir = config_path.parent if config_path is not None else Path.cwd()
-    db_path = _resolve_path(base_dir, config.data.db_path)
+    if args.command == "gui":
+        if gui_runner is None:
+            print("실행 불가: 이 진입점에서는 GUI를 열 수 없다. python -m coindata gui로 실행하라.", file=sys.stderr)
+            return EXIT_CANNOT_RUN
+        return gui_runner(args.config)
+    try:
+        return _dispatch(args, config, paths, runtime)
+    except CommandError as exc:
+        print(str(exc), file=sys.stderr)
+        return EXIT_CANNOT_RUN
 
+
+def _dispatch(args: argparse.Namespace, config: Config, paths: Paths, runtime: Runtime | None) -> int:
     if args.command == "status":
-        return _run_status(config, db_path)
+        print(status_report(config, paths))
+        return EXIT_OK
     if args.command == "plan":
-        return _run_plan_command(config, db_path, runtime, args)
+        return _run_plan_command(config, paths, runtime, args)
     if args.command == "summary":
-        output_dir = _resolve_path(base_dir, config.report.output_dir)
-        return _run_summary_command(config, db_path, output_dir, runtime, args.at, args.full_params, args.compact)
-
-    days = args.days if args.command == "init" and args.days is not None else config.data.init_days
-    if days < 1:
-        print("--days는 1 이상이어야 한다.", file=sys.stderr)
-        return EXIT_CANNOT_RUN
-    if args.command == "sync" and not db_path.exists():
-        print(f"저장소가 없다: {db_path}. init을 먼저 실행하라.", file=sys.stderr)
-        return EXIT_CANNOT_RUN
-    runtime = runtime or Runtime(UrllibTransport(), SystemClock(), SystemSleeper())
-    lock_path = db_path.with_name(db_path.name + ".lock")
-    try:
-        with ProcessLock(lock_path):
-            conn = open_db(db_path, config.runtime.db_busy_timeout_ms)
-            try:
-                return _run_ingest(args.command, conn, config, runtime, days)
-            finally:
-                conn.close()
-    except LockError as exc:
-        print(f"실행 불가: {exc}", file=sys.stderr)
-        return EXIT_CANNOT_RUN
-    except (StoreError, sqlite3.Error) as exc:
-        logger.exception("cannot run %s", args.command)
-        print(f"실행 불가: {exc}", file=sys.stderr)
-        return EXIT_CANNOT_RUN
-
-
-def build_clients(config: Config, runtime: Runtime) -> tuple[ArchiveClient, BinanceRestClient]:
-    settings = config.runtime
-    retry = RetryPolicy(settings.max_retries, settings.backoff_initial_seconds, settings.backoff_max_seconds)
-    executor = RequestExecutor(runtime.transport, retry, runtime.sleeper, settings.http_timeout_seconds)
-    weight_limiter = WeightLimiter(
-        API_LIMITS.rest_weight_per_minute, settings.rate_limit_ratio, runtime.clock, runtime.sleeper
-    )
-    count_limiter = RequestCountLimiter(
-        API_LIMITS.futures_data_requests_per_window,
-        API_LIMITS.futures_data_window_ms,
-        settings.rate_limit_ratio,
-        runtime.clock,
-        runtime.sleeper,
-    )
-    archive = ArchiveClient(executor, settings.archive_base_url, settings.checksum_retries)
-    rest = BinanceRestClient(executor, settings.rest_base_url, weight_limiter, count_limiter)
-    return archive, rest
-
-
-def _run_ingest(command: str, conn: sqlite3.Connection, config: Config, runtime: Runtime, days: int) -> int:
-    ensure_schema(conn)
-    symbol = config.data.symbol
-    if command == "sync" and all(query.time_bounds(conn, dataset, symbol) is None for dataset in Dataset):
-        print("저장소가 비어 있다. init을 먼저 실행하라.", file=sys.stderr)
-        return EXIT_CANNOT_RUN
-
-    mode = RunMode.INIT if command == "init" else RunMode.SYNC
-    run_id = writer.start_run(conn, mode, runtime.clock.now_ms())
-    archive, rest = build_clients(config, runtime)
-    progress = _print_progress if mode is RunMode.INIT else None
-    flow = IngestFlow(conn, config, archive, rest, runtime.clock, progress)
-    try:
-        report = run_init(flow, days) if mode is RunMode.INIT else run_sync(flow, config)
-    except Exception as exc:
-        # 실행 기록에 실패를 남기고 종료 코드로 알리기 위한 최상위 처리다. 원인은 로그에 남긴다(CLAUDE.md C-5).
-        logger.exception("%s failed", command)
-        flow.report.failures.append(f"예상하지 못한 오류: {exc!r}")
-        writer.finish_run(conn, run_id, RunStatus.FAILED, runtime.clock.now_ms(), flow.report.to_json())
-        print(f"{command} 실패: {exc}", file=sys.stderr)
-        return EXIT_CANNOT_RUN
-
-    status = RunStatus.PARTIAL if report.partial else RunStatus.SUCCESS
-    writer.finish_run(conn, run_id, status, runtime.clock.now_ms(), report.to_json())
-    if mode is RunMode.SYNC:
-        refresh_plans(conn, config, runtime.clock.now_ms())  # FR-7.4
+        return _run_summary_command(config, paths, runtime, args.at, args.full_params, args.compact)
+    mode = RunMode.INIT if args.command == "init" else RunMode.SYNC
+    days = args.days if mode is RunMode.INIT and args.days is not None else config.data.init_days
+    outcome = run_ingest(config, paths, runtime or default_runtime(), mode, days, _print_progress)
     if mode is RunMode.INIT:
-        _print_init_result(conn, symbol, report, status)
+        _print_init_result(outcome)
     else:
-        _print_sync_result(report, status)
-    return EXIT_PARTIAL if report.partial else EXIT_OK
+        _print_sync_result(outcome.report, outcome.status)
+    return outcome.exit_code
 
 
 def _run_summary_command(
-    config: Config,
-    db_path: Path,
-    output_dir: Path,
-    runtime: Runtime | None,
-    at_text: str | None,
-    full_params: bool,
-    compact: bool,
+    config: Config, paths: Paths, runtime: Runtime | None, at_text: str | None, full_params: bool, compact: bool
 ) -> int:
     try:
         at_ms = parse_at(at_text) if at_text is not None else None
     except SummaryError as exc:
-        print(f"실행 불가: {exc}", file=sys.stderr)
-        return EXIT_CANNOT_RUN
-    if not db_path.exists():
-        print(f"저장소가 없다: {db_path}. init을 먼저 실행하라.", file=sys.stderr)
-        return EXIT_CANNOT_RUN
-    runtime = runtime or Runtime(UrllibTransport(), SystemClock(), SystemSleeper())
-    lock_path = db_path.with_name(db_path.name + ".lock")
-    try:
-        with ProcessLock(lock_path):
-            conn = open_db(db_path, config.runtime.db_busy_timeout_ms)
-            try:
-                ensure_schema(conn)
-                clients = build_clients(config, runtime) if at_ms is None else None
-                result = run_summary(
-                    conn, config, output_dir, runtime.clock, runtime.sleeper, clients, at_ms, full_params, compact
-                )
-            finally:
-                conn.close()
-    except (LockError, SummaryError, SummaryExistsError) as exc:
-        print(f"실행 불가: {exc}", file=sys.stderr)
-        return EXIT_CANNOT_RUN
-    except (StoreError, sqlite3.Error, OSError) as exc:
-        logger.exception("cannot run summary")
-        print(f"실행 불가: {exc}", file=sys.stderr)
-        return EXIT_CANNOT_RUN
+        raise CommandError(f"실행 불가: {exc}") from exc
+    result = make_summary(config, paths, runtime or default_runtime(), at_ms, full_params, compact)
     print(result.path)
     if result.partial:
         print(f"부분 실패: 취득 실패 {len(result.failures)}건, 요약의 gaps 참조", file=sys.stderr)
@@ -232,79 +135,29 @@ def _run_summary_command(
     return EXIT_OK
 
 
-def _run_plan_command(config: Config, db_path: Path, runtime: Runtime | None, args: argparse.Namespace) -> int:
-    if not db_path.exists():
-        print(f"저장소가 없다: {db_path}. init을 먼저 실행하라.", file=sys.stderr)
-        return EXIT_CANNOT_RUN
+def _run_plan_command(config: Config, paths: Paths, runtime: Runtime | None, args: argparse.Namespace) -> int:
+    if not paths.db_path.exists():
+        raise CommandError(f"저장소가 없다: {paths.db_path}. init을 먼저 실행하라.")
     clock = runtime.clock if runtime else SystemClock()
-    text = None
     if args.plan_command == "add":
         try:
             text = sys.stdin.read() if args.source == "-" else Path(args.source).read_text(encoding="utf-8")
         except OSError as exc:
-            print(f"실행 불가: 입력을 읽을 수 없다: {exc}", file=sys.stderr)
-            return EXIT_CANNOT_RUN
-    lock_path = db_path.with_name(db_path.name + ".lock")
-    try:
-        with ProcessLock(lock_path):
-            conn = open_db(db_path, config.runtime.db_busy_timeout_ms)
-            try:
-                ensure_schema(conn)
-                if args.plan_command == "add":
-                    return _plan_add(conn, config, text or "", clock.now_ms())
-                if args.plan_command == "cancel":
-                    problem = cancel(conn, args.plan_key, clock.now_ms())
-                    if problem:
-                        print(f"실행 불가: {problem}", file=sys.stderr)
-                        return EXIT_CANNOT_RUN
-                    print(f"취소했다: {args.plan_key}")
-                    return EXIT_OK
-                refresh_plans(conn, config, clock.now_ms())
-                print(render_plan_list(conn, args.all))
-                return EXIT_OK
-            finally:
-                conn.close()
-    except LockError as exc:
-        print(f"실행 불가: {exc}", file=sys.stderr)
-        return EXIT_CANNOT_RUN
-    except (StoreError, sqlite3.Error) as exc:
-        logger.exception("cannot run plan")
-        print(f"실행 불가: {exc}", file=sys.stderr)
-        return EXIT_CANNOT_RUN
-
-
-def _plan_add(conn: sqlite3.Connection, config: Config, text: str, now_ms: int) -> int:
-    try:
-        outcomes = add_plans(conn, config, text, now_ms)
-    except PlanInputError as exc:
-        print(f"실행 불가: {exc}", file=sys.stderr)
-        return EXIT_CANNOT_RUN
-    for outcome in outcomes:
-        if outcome.registered:
-            print(f"등록: {outcome.plan_key}")
-        else:
-            print(f"거부: {outcome.plan_key}")
-            for error in outcome.errors:
-                print(f"  - {error}")
-    return EXIT_OK if all(o.registered for o in outcomes) else EXIT_PARTIAL
-
-
-def _run_status(config: Config, db_path: Path) -> int:
-    if not db_path.exists():
-        print(f"저장소가 없다: {db_path}", file=sys.stderr)
-        return EXIT_CANNOT_RUN
-    try:
-        conn = open_db(db_path, config.runtime.db_busy_timeout_ms)
-    except StoreError as exc:
-        print(f"실행 불가: {exc}", file=sys.stderr)
-        return EXIT_CANNOT_RUN
-    try:
-        if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ingest_run'").fetchone() is None:
-            print(f"저장소가 초기화되지 않았다: {db_path}. init을 먼저 실행하라.", file=sys.stderr)
-            return EXIT_CANNOT_RUN
-        print(render_status(conn, config.data.symbol, db_path))
-    finally:
-        conn.close()
+            raise CommandError(f"실행 불가: 입력을 읽을 수 없다: {exc}") from exc
+        outcomes = plan_add(config, paths, clock, text, dry_run=False)
+        for outcome in outcomes:
+            if outcome.registered:
+                print(f"등록: {outcome.plan_key}")
+            else:
+                print(f"거부: {outcome.plan_key}")
+                for error in outcome.errors:
+                    print(f"  - {error}")
+        return EXIT_OK if all(o.registered for o in outcomes) else EXIT_PARTIAL
+    if args.plan_command == "cancel":
+        plan_cancel(config, paths, clock, args.plan_key)
+        print(f"취소했다: {args.plan_key}")
+        return EXIT_OK
+    print(render_plan_list(plan_list(config, paths, clock, args.all)))
     return EXIT_OK
 
 
@@ -316,34 +169,23 @@ def _status_text(status: RunStatus) -> str:
     return "정상" if status is RunStatus.SUCCESS else "부분 실패"
 
 
-def _print_init_result(conn: sqlite3.Connection, symbol: str, report: RunReport, status: RunStatus) -> None:
+def _print_init_result(outcome: IngestOutcome) -> None:
     print("\n적재 결과")
-    for dataset_status in query.dataset_statuses(conn, symbol):
+    for dataset_status in outcome.datasets:
         first = format_ms(dataset_status.first_ms) if dataset_status.first_ms is not None else "-"
         last = format_ms(dataset_status.last_ms) if dataset_status.last_ms is not None else "-"
         print(
             f"  {dataset_status.dataset.value:<18}{dataset_status.row_count:>10,}행  {first} ~ {last}  "
             f"미해소 결측 {dataset_status.open_gap_count}건"
         )
-    print(f"상태: {_status_text(status)}" + (f" (실패 {len(report.failures)}건, 로그 참조)" if report.failures else ""))
+    report = outcome.report
+    print(f"상태: {_status_text(outcome.status)}" + (f" (실패 {len(report.failures)}건, 로그 참조)" if report.failures else ""))
 
 
 def _print_sync_result(report: RunReport, status: RunStatus) -> None:
     changed = ", ".join(f"{name} {item.rows_changed}" for name, item in report.datasets.items())
     open_gaps = sum(item.gaps_open for item in report.datasets.values())
     print(f"sync {_status_text(status)}: 적재 {changed} / 미해소 결측 {open_gaps}건")
-
-
-def _resolve_config_path(explicit: Path | None) -> Path | None:
-    if explicit is not None:
-        return explicit
-    default = Path.cwd() / DEFAULT_CONFIG_NAME
-    return default if default.exists() else None
-
-
-def _resolve_path(base_dir: Path, value: str) -> Path:
-    path = Path(value)
-    return path if path.is_absolute() else base_dir / path
 
 
 def _setup_logging(level: str) -> None:

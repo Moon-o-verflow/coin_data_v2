@@ -140,8 +140,11 @@ def metrics_csv(day: date, empty_taker: bool = False, skip: Iterable[int] = (), 
 
 def zip_bytes(name: str, text: str) -> bytes:
     buffer = io.BytesIO()
+    # 수정 시각을 고정한다. 현재 시각이 들어가면 .CHECKSUM 요청과 zip 요청이 초 경계를 넘을 때 바이트가 달라진다.
+    info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
+    info.compress_type = zipfile.ZIP_DEFLATED
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr(name, text)
+        archive.writestr(info, text)
     return buffer.getvalue()
 
 

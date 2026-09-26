@@ -20,6 +20,7 @@ from coindata.models import (
     MINUTE_MS,
     CoCondition,
     Condition,
+    AtRegistration,
     PlanSpec,
     PlanState,
 )
@@ -42,8 +43,9 @@ class PlanInputError(Exception):
 @dataclass(frozen=True, slots=True)
 class PlanAddOutcome:
     plan_key: str
-    registered: bool
+    registered: bool  # 검증만 했으면(dry_run) 등록 가능 여부
     errors: tuple[str, ...]
+    at_registration: AtRegistration | None = None  # 오류가 없을 때의 등록 시 계산값 (FR-7.5)
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +160,10 @@ def check_against_source(spec: PlanSpec, ref_time: int, ref_price: float) -> lis
 # ---------------------------------------------------------------------------
 
 
-def add_plans(conn: sqlite3.Connection, config: Config, text: str, now_ms: int) -> list[PlanAddOutcome]:
+def add_plans(
+    conn: sqlite3.Connection, config: Config, text: str, now_ms: int, dry_run: bool = False
+) -> list[PlanAddOutcome]:
+    """FR-7.2 검증 후 등록한다. `dry_run`이면 저장하지 않고 같은 검증과 계산만 한다(FR-8.5)."""
     try:
         data = json.loads(text)
     except ValueError as exc:
@@ -183,19 +188,27 @@ def add_plans(conn: sqlite3.Connection, config: Config, text: str, now_ms: int) 
     default_expiry = source.ref_time + config.plans.default_ttl_hours * HOUR_MS
 
     outcomes = []
+    seen: set[str] = set()
     for index, raw in enumerate(data["plans"]):
         label, spec, errors = parse_plan(raw, index, source.summary_id, config)
         if spec is not None:
             errors = check_against_source(spec, source.ref_time, analysis.ref_price)
-            if not errors and plan_store.plan_exists(conn, spec.plan_key):
+            if not errors and (spec.plan_key in seen or plan_store.plan_exists(conn, spec.plan_key)):
                 errors = [f"{spec.plan_key}: 같은 plan_key가 이미 있다"]
         if spec is None or errors:
             outcomes.append(PlanAddOutcome(label, False, tuple(errors)))
             continue
+        seen.add(spec.plan_key)
         at_reg = registration(spec, analysis, now_ms, source.params_hash != current_hash)
-        plan_store.insert_plan(conn, spec, now_ms, spec.expires_at or default_expiry, at_reg)
-        outcomes.append(PlanAddOutcome(spec.plan_key, True, ()))
+        if not dry_run:
+            plan_store.insert_plan(conn, spec, now_ms, spec.expires_at or default_expiry, at_reg)
+        outcomes.append(PlanAddOutcome(spec.plan_key, True, (), at_reg))
     return outcomes
+
+
+def used_plan_ids(conn: sqlite3.Connection, source_summary_id: str) -> set[str]:
+    """그 요약을 기준으로 이미 등록된 `plan_id` (GUI의 자동 부여가 피할 번호, FR-8.5)."""
+    return {r.spec.plan_id for r in plan_store.list_plans(conn) if r.spec.source_summary_id == source_summary_id}
 
 
 def cancel(conn: sqlite3.Connection, plan_key: str, now_ms: int) -> str | None:
