@@ -193,3 +193,16 @@ def get_summary(conn: sqlite3.Connection, summary_id: str) -> SummaryRecord | No
         return None
     sid, created, trig, ref, price, params_hash, state, path, params = row
     return SummaryRecord(sid, created, SummaryTrigger(trig), ref, price, params_hash, state, path, params)
+
+
+def recent_summaries(conn: sqlite3.Connection, limit: int) -> list[SummaryRecord]:
+    """최근에 만든 요약부터 `limit`개 (GUI 목록, FR-8.3)."""
+    rows = conn.execute(
+        'SELECT summary_id, created_at, "trigger", ref_time, ref_price, params_hash, state, file_path, params '
+        "FROM summary_log ORDER BY created_at DESC, summary_id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [
+        SummaryRecord(sid, created, SummaryTrigger(trig), ref, price, params_hash, state, path, params)
+        for sid, created, trig, ref, price, params_hash, state, path, params in rows
+    ]
