@@ -61,7 +61,7 @@ class SchemaTest(StoreTestCase):
         ensure_schema(self.conn)
         self.assertEqual(self.conn.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
         writer.insert_summary(
-            self.conn, SummaryRecord("B", 5, SummaryTrigger.HISTORICAL, 4, 3.0, "h", "{}", "b.json")
+            self.conn, SummaryRecord("B", 5, SummaryTrigger.HISTORICAL, 4, 3.0, "h", "{}", "b.json", "{}")
         )
         self.assertEqual(self.conn.execute('SELECT summary_id, "trigger" FROM summary_log ORDER BY summary_id').fetchall(),
                          [("A", "manual"), ("B", "historical")])
@@ -90,6 +90,20 @@ class SchemaTest(StoreTestCase):
                 "INSERT INTO data_gap (dataset, symbol, field, start_ms, end_ms, reason, detected_at) "
                 "VALUES ('kline_1m', 'ETHUSDT', '*', 1, 9, 'source_gap', 4)"
             )
+
+    def test_migrates_v3_adds_params_column(self) -> None:
+        self.conn.execute("DROP TABLE summary_log")
+        self.conn.execute(
+            'CREATE TABLE summary_log (summary_id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, "trigger" TEXT NOT NULL, '
+            "ref_time INTEGER NOT NULL, ref_price REAL NOT NULL, params_hash TEXT NOT NULL, state TEXT NOT NULL, "
+            "file_path TEXT NOT NULL)"
+        )
+        self.conn.execute("INSERT INTO summary_log VALUES ('A', 1, 'manual', 2, 3.0, 'h', '{}', 'a.json')")
+        self.conn.execute("PRAGMA user_version = 3")
+        self.conn.commit()
+        ensure_schema(self.conn)
+        prev = query.previous_summary(self.conn, SummaryTrigger.MANUAL, 10)
+        self.assertEqual((prev.summary_id, prev.params), ("A", None))
 
     def test_schema_is_idempotent(self) -> None:
         ensure_schema(self.conn)

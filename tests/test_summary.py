@@ -21,8 +21,8 @@ from tests.fakes import FUNDING_RATE, ms
 from tests.test_cli import D21, CliTestCase
 
 SECTIONS = (
-    "meta", "data_freshness", "price_structure", "regime", "derivatives", "funding",
-    "levels", "events", "state", "statistics", "gaps", "unavailable",
+    "meta", "data_freshness", "price_structure", "regime", "derivatives", "flow", "reference", "funding",
+    "levels", "events", "plans", "state", "statistics", "gaps", "unavailable",
 )
 # CLAUDE.md R-2 금지어 목록
 FORBIDDEN = (
@@ -30,6 +30,8 @@ FORBIDDEN = (
     "stop_loss", "take_profit", "probability", "prob", "win_rate", "expected_value", "confidence", "score",
     "support", "resistance",
 )
+# CLAUDE.md R-1: statistics 밖에서 쓰지 않는 이름 (접미사가 아니라 이름 검사)
+RATIO_NAMES = ("held_ratio", "failed_ratio", "probability", "prob", "win_rate", "hit_rate", "expected_value", "expectancy")
 AT1, AT2, AT3 = "2026-09-23T12:05Z", "2026-09-23T12:25Z", "2026-09-23T12:43Z"
 
 
@@ -47,6 +49,18 @@ def forbidden_tokens(document: Any) -> list[tuple[str, str]]:
     for text in strings_of(document):
         tokens = re.split(r"[^a-z0-9]+", text.lower())
         for word in FORBIDDEN:
+            parts = word.split("_")
+            if any(tokens[i : i + len(parts)] == parts for i in range(len(tokens))):
+                found.append((word, text))
+    return found
+
+
+def ratio_names_outside_statistics(document: dict[str, Any]) -> list[tuple[str, str]]:
+    rest = {k: v for k, v in document.items() if k != "statistics"}
+    found = []
+    for text in strings_of(rest):
+        tokens = re.split(r"[^a-z0-9]+", text.lower())
+        for word in RATIO_NAMES:
             parts = word.split("_")
             if any(tokens[i : i + len(parts)] == parts for i in range(len(tokens))):
                 found.append((word, text))
@@ -101,8 +115,46 @@ class LiveSummaryTest(SummaryTestCase):
         self.assertIsNone(doc["funding"]["null_reason"])
         self.assertEqual(doc["gaps"]["acquisition_failures"], [])
         self.assertEqual([tf["tf"] for tf in doc["regime"]["timeframes"]], ["15m", "30m", "1h", "1d"])
-        self.assertEqual(doc["statistics"], {"status": "not_implemented"})
-        self.assertEqual({u["item"] for u in doc["unavailable"]}, {"liquidation", "trade_based_indicators", "statistics"})
+        s1 = doc["statistics"]["s1"]
+        self.assertEqual((s1["definition_version"], s1["horizon_bars"], s1["min_n"]), ("S1.v1", [4, 8], 30))
+        self.assertEqual([h["horizon_bars"] for h in s1["horizons"]], [4, 8])
+        axes = [(b["axis"], b["value"]) for b in s1["horizons"][0]["buckets"]]
+        self.assertEqual(axes[0], ("all", "all"))
+        self.assertEqual([v for a, v in axes if a == "break_kind"], ["BOS", "MSS", "break_no_displacement", "break_unclassified"])
+        for b in s1["horizons"][0]["buckets"]:
+            self.assertEqual(b["held"] + b["failed"], b["n"])
+            if b["n"] < 30:
+                self.assertIsNone(b["held_ratio"])
+                self.assertEqual(b["null_reason"], "insufficient_sample")
+        self.assertEqual({u["item"] for u in doc["unavailable"]}, {"liquidation", "trade_size_distribution"})
+        # 참조 지표와 세션 (A.13, FR-4.9)
+        ref = doc["reference"]["timeframes"]
+        self.assertEqual([r["tf"] for r in ref], ["15m", "1h"])
+        self.assertEqual([m["period"] for m in ref[0]["ma"]["values"]], [5, 20, 60])
+        self.assertEqual(
+            set(ref[0]), {"tf", "ma", "rsi", "bollinger", "macd", "rsi_divergence"}
+        )
+        self.assertEqual(set(meta["session"]), {"label", "active", "null_reason"})
+        self.assertIsNotNone(meta["session"]["label"])
+        # 스키마 v2 (CR-2)
+        self.assertEqual(meta["schema_version"], "2")
+        self.assertNotIn("params", meta)
+        self.assertEqual([f["tf"] for f in doc["flow"]["timeframes"]], ["15m", "30m", "1h", "1d"])
+        tf15 = doc["price_structure"]["timeframes"][0]
+        for key in ("high_relation", "low_relation", "last_break", "retracement_tentative"):
+            self.assertIn(key, tf15)
+        self.assertTrue(all("distance_bp" in s for s in tf15["swings"]))
+        self.assertTrue(all("absent" in c and "null_reason" not in c for c in tf15["candles"]))
+        self.assertIn("er_direction", doc["regime"]["timeframes"][0])
+        prem = doc["derivatives"]["premium_index"]
+        self.assertIn("current_pct", prem)
+        quad = doc["derivatives"]["open_interest"]["quadrants"][0]
+        self.assertEqual(set(quad) >= {"quadrant_confirmed", "quadrant_raw", "confirmed_since", "duration_snapshots"}, True)
+        self.assertTrue(all("pct" in r and "sample_n" in r for r in doc["derivatives"]["ratios"]))
+        self.assertFalse(any(r["possibly_unpublished_at_ref_time"] for r in doc["derivatives"]["ratios"]))
+        for level in doc["levels"]["levels"] or []:
+            self.assertTrue(level["level_id"].startswith("lv_"))
+            self.assertIn("touch_count", level)
         self.assertIsNone(doc["state"]["previous"])
         self.assertEqual(self.query("SELECT \"trigger\", summary_id FROM summary_log"), [("manual", meta["summary_id"])])
 
@@ -138,7 +190,18 @@ class LiveSummaryTest(SummaryTestCase):
         _, third = self.summary()
         self.assertTrue(third["state"]["params_changed"])
         self.assertNotEqual(third["meta"]["params_hash"], second["meta"]["params_hash"])
-        self.assertEqual(third["meta"]["params"]["indicators"]["zigzag"]["k"], 3.0)
+        self.assertEqual(third["meta"]["params_diff"], [{"key": "indicators.zigzag.k", "from": 2.0, "to": 3.0}])
+        self.assertNotIn("params_diff", second["meta"])
+        _, full = self.summary("--full-params")
+        self.assertEqual(full["meta"]["params"]["indicators"]["zigzag"]["k"], 3.0)
+
+    def test_compact_output(self) -> None:
+        self.clock.now += 1_000
+        code, output = self.run_cli("summary", "--compact")
+        self.assertEqual(code, EXIT_OK)
+        text = Path(output.strip()).read_text(encoding="utf-8")
+        self.assertEqual(text.count("\n"), 1)
+        self.assertEqual(json.loads(text)["meta"]["schema_version"], "2")
 
 
 class HistoricalSummaryTest(SummaryTestCase):
@@ -158,6 +221,11 @@ class HistoricalSummaryTest(SummaryTestCase):
         self.assertEqual(meta["current_price"]["null_reason"], "not_available_at_ref_time")
         self.assertEqual(doc["funding"]["null_reason"], "not_available_at_ref_time")
         self.assertFalse(doc["data_freshness"]["judged"])
+        # FR-4.8: 기준 시각 직전 공개 지연 구간의 metrics 값은 필드 단위로 표시한다(taker 10분, 나머지 5분).
+        ratios = {r["field"]: r for r in doc["derivatives"]["ratios"]}
+        self.assertEqual(ratios["taker_buy_sell_ratio"]["ts"], "2026-09-23T12:05Z")
+        self.assertTrue(ratios["taker_buy_sell_ratio"]["possibly_unpublished_at_ref_time"])
+        self.assertTrue(doc["derivatives"]["open_interest"]["possibly_unpublished_at_ref_time"])
 
     def test_does_not_read_after_ref_time(self) -> None:
         _, first = self.summary("--at", AT1)
@@ -241,6 +309,12 @@ class ForbiddenWordTest(SummaryTestCase):
         documents.append(self.summary()[1])
         for doc in documents:
             self.assertEqual(forbidden_tokens(doc), [])
+            self.assertEqual(ratio_names_outside_statistics(doc), [])
+
+    def test_ratio_name_check_is_by_name_not_suffix(self) -> None:
+        doc = {"statistics": {"held_ratio": 0.5}, "candles": {"upper_wick_ratio": 0.1, "taker_buy_sell_ratio": 1.0}}
+        self.assertEqual(ratio_names_outside_statistics(doc), [])
+        self.assertEqual([w for w, _ in ratio_names_outside_statistics({"x": {"held_ratio": 1}})], ["held_ratio"])
 
     def test_checker_detects_tokens(self) -> None:
         self.assertEqual([w for w, _ in forbidden_tokens({"stop_loss": 1, "a": "long_signal"})], ["stop_loss", "signal"])

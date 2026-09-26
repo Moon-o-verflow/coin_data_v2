@@ -18,7 +18,9 @@ from pathlib import Path
 
 from coindata.cli.flows import IngestFlow, RunReport, run_init, run_sync
 from coindata.cli.lock import LockError, ProcessLock
-from coindata.cli.status import render_status
+from coindata.cli.plan import PlanInputError, add_plans, cancel
+from coindata.cli.plan_eval import refresh_plans
+from coindata.cli.status import render_plan_list, render_status
 from coindata.cli.summary import SummaryError, parse_at, run_summary
 from coindata.config import API_LIMITS, Config, ConfigError, load_config
 from coindata.ingest.archive import ArchiveClient
@@ -75,7 +77,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--at",
         help="과거 시점 요약. UTC 시각(예: 2026-05-29T12:05Z). 외부 요청 없이 저장소만 읽는다 (FR-4.8)",
     )
+    summary.add_argument("--full-params", action="store_true", help="meta에 전체 파라미터를 싣는다")
+    summary.add_argument("--compact", action="store_true", help="들여쓰기 없이 한 줄로 저장한다")
     commands.add_parser("status", help="저장소 상태를 보여준다 (UF-4)")
+    plan = commands.add_parser("plan", help="조건 레지스트리 (PRD 10.7)")
+    plan_commands = plan.add_subparsers(dest="plan_command", required=True)
+    plan_add = plan_commands.add_parser("add", help="plan/1 JSON을 등록한다")
+    plan_add.add_argument("source", help="JSON 파일 경로. '-'이면 표준 입력")
+    plan_list = plan_commands.add_parser("list", help="계획 목록 (기본: pending, active)")
+    plan_list.add_argument("--all", action="store_true", help="종료된 계획도 보여준다")
+    plan_cancel = plan_commands.add_parser("cancel", help="pending 계획을 취소한다")
+    plan_cancel.add_argument("plan_key", help="<source_summary_id>/<plan_id>")
     return parser
 
 
@@ -93,9 +105,11 @@ def main(argv: Sequence[str] | None = None, runtime: Runtime | None = None) -> i
 
     if args.command == "status":
         return _run_status(config, db_path)
+    if args.command == "plan":
+        return _run_plan_command(config, db_path, runtime, args)
     if args.command == "summary":
         output_dir = _resolve_path(base_dir, config.report.output_dir)
-        return _run_summary_command(config, db_path, output_dir, runtime, args.at)
+        return _run_summary_command(config, db_path, output_dir, runtime, args.at, args.full_params, args.compact)
 
     days = args.days if args.command == "init" and args.days is not None else config.data.init_days
     if days < 1:
@@ -165,6 +179,8 @@ def _run_ingest(command: str, conn: sqlite3.Connection, config: Config, runtime:
 
     status = RunStatus.PARTIAL if report.partial else RunStatus.SUCCESS
     writer.finish_run(conn, run_id, status, runtime.clock.now_ms(), report.to_json())
+    if mode is RunMode.SYNC:
+        refresh_plans(conn, config, runtime.clock.now_ms())  # FR-7.4
     if mode is RunMode.INIT:
         _print_init_result(conn, symbol, report, status)
     else:
@@ -173,7 +189,13 @@ def _run_ingest(command: str, conn: sqlite3.Connection, config: Config, runtime:
 
 
 def _run_summary_command(
-    config: Config, db_path: Path, output_dir: Path, runtime: Runtime | None, at_text: str | None
+    config: Config,
+    db_path: Path,
+    output_dir: Path,
+    runtime: Runtime | None,
+    at_text: str | None,
+    full_params: bool,
+    compact: bool,
 ) -> int:
     try:
         at_ms = parse_at(at_text) if at_text is not None else None
@@ -191,7 +213,9 @@ def _run_summary_command(
             try:
                 ensure_schema(conn)
                 clients = build_clients(config, runtime) if at_ms is None else None
-                result = run_summary(conn, config, output_dir, runtime.clock, runtime.sleeper, clients, at_ms)
+                result = run_summary(
+                    conn, config, output_dir, runtime.clock, runtime.sleeper, clients, at_ms, full_params, compact
+                )
             finally:
                 conn.close()
     except (LockError, SummaryError, SummaryExistsError) as exc:
@@ -206,6 +230,63 @@ def _run_summary_command(
         print(f"부분 실패: 취득 실패 {len(result.failures)}건, 요약의 gaps 참조", file=sys.stderr)
         return EXIT_PARTIAL
     return EXIT_OK
+
+
+def _run_plan_command(config: Config, db_path: Path, runtime: Runtime | None, args: argparse.Namespace) -> int:
+    if not db_path.exists():
+        print(f"저장소가 없다: {db_path}. init을 먼저 실행하라.", file=sys.stderr)
+        return EXIT_CANNOT_RUN
+    clock = runtime.clock if runtime else SystemClock()
+    text = None
+    if args.plan_command == "add":
+        try:
+            text = sys.stdin.read() if args.source == "-" else Path(args.source).read_text(encoding="utf-8")
+        except OSError as exc:
+            print(f"실행 불가: 입력을 읽을 수 없다: {exc}", file=sys.stderr)
+            return EXIT_CANNOT_RUN
+    lock_path = db_path.with_name(db_path.name + ".lock")
+    try:
+        with ProcessLock(lock_path):
+            conn = open_db(db_path, config.runtime.db_busy_timeout_ms)
+            try:
+                ensure_schema(conn)
+                if args.plan_command == "add":
+                    return _plan_add(conn, config, text or "", clock.now_ms())
+                if args.plan_command == "cancel":
+                    problem = cancel(conn, args.plan_key, clock.now_ms())
+                    if problem:
+                        print(f"실행 불가: {problem}", file=sys.stderr)
+                        return EXIT_CANNOT_RUN
+                    print(f"취소했다: {args.plan_key}")
+                    return EXIT_OK
+                refresh_plans(conn, config, clock.now_ms())
+                print(render_plan_list(conn, args.all))
+                return EXIT_OK
+            finally:
+                conn.close()
+    except LockError as exc:
+        print(f"실행 불가: {exc}", file=sys.stderr)
+        return EXIT_CANNOT_RUN
+    except (StoreError, sqlite3.Error) as exc:
+        logger.exception("cannot run plan")
+        print(f"실행 불가: {exc}", file=sys.stderr)
+        return EXIT_CANNOT_RUN
+
+
+def _plan_add(conn: sqlite3.Connection, config: Config, text: str, now_ms: int) -> int:
+    try:
+        outcomes = add_plans(conn, config, text, now_ms)
+    except PlanInputError as exc:
+        print(f"실행 불가: {exc}", file=sys.stderr)
+        return EXIT_CANNOT_RUN
+    for outcome in outcomes:
+        if outcome.registered:
+            print(f"등록: {outcome.plan_key}")
+        else:
+            print(f"거부: {outcome.plan_key}")
+            for error in outcome.errors:
+                print(f"  - {error}")
+    return EXIT_OK if all(o.registered for o in outcomes) else EXIT_PARTIAL
 
 
 def _run_status(config: Config, db_path: Path) -> int:

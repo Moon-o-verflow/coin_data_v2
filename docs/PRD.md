@@ -2,7 +2,7 @@
 
 | 항목 | 내용 |
 |---|---|
-| 문서 버전 | 1.9 |
+| 문서 버전 | 1.14 |
 | 작성일 | 2026-09-24 |
 | 대상 시스템 | 바이낸스 USD-M 무기한 선물 ETH/USDT 판단 재료 생성기 |
 | 선행 버전 | coinDataMinning v2.1.3 |
@@ -20,6 +20,11 @@
 | 1.6 | 2단계 결정: 신선도를 실행 시각 기준으로 판정(FR-4.3), 요약 파일명·상태 비교 항목·`unavailable`·표기 규칙(FR-4.1~4.5), 경로 의존 계산의 고정 시작점(A.1.8), `compute`·`report` 설정 |
 | 1.7 | 부록 A v1.1: 돌파 대상을 유형별 최신 확정 스윙 하나로 한정(A.3.4), shock 시작의 효율성 변화 이벤트 중복 제거, 레벨 스윙 출처·정규화 TF 설정화, 5m·평활 TF 이벤트의 `tf`·`bars_ago` 기준 명시 |
 | 1.8 | 과거 시점 요약 `summary --at`(FR-4.8), `summary_log.trigger`에 `historical` 추가(스키마 버전 2), 요약 출력 단위 보완(FR-4.1) |
+| 1.14 | 13장 정리: 1분봉 기반 델타·델타 EMA(A.12, CR-2.14)를 체결 기반 지표 항목에서 제외, 체결 규모 분포를 명시. S-2는 사용 데이터 확인 후 결정으로 보류 유지 |
+| 1.13 | CR-2.15 참조 지표(부록 A.13, 계열 `reference`, 요약 섹션 `reference`), CR-2.16 세션 표시(`meta.session`, IANA 시간대 기준). S-1 판정 기간 고정 강제(부록 B.1.8) |
+| 1.12 | CR-2.2 S-1 돌파 유지율 통계(부록 B 신설, `statistics` 섹션), CLAUDE.md R-1 개정(과거 빈도 기술의 예외와 안전장치), T-6 이름 목록 검사 |
+| 1.11 | CR-2.1 조건 레지스트리와 소급 평가(10.7, FR-7.x), `plan`·`plan_state_log` 테이블(저장소 스키마 버전 5), 요약 섹션 `plans`, `plan` 명령. 13장의 판단 로그 중 조건 추적을 범위 안으로 이동 |
+| 1.10 | CR-2 첫 묶음, 부록 A v1.3, 요약 스키마 v2: 스윙 비교 허용 오차(A.3.3), 마지막 돌파(A.3.4), 진행 파동 되돌림(A.3.5), 4분면 3×3·분포 불감대·지속 조건(A.5.1), 비율·프리미엄 1분 백분위(A.5.2, A.5.4), 레벨 식별자·bp 거리·터치 횟수(A.7.4, A.7.5), 체결 흐름 계열 `flow`(A.12), 방향 서술 필드, 과거 모드 필드별 공개 지연 표시, 출력 정리. 저장소 스키마 버전 4 |
 | 1.9 | 부록 A v1.2: `quadrant_change`를 확정 4분면 사이의 변화로 한정(A.8.3). 결손 분류 `awaiting_archive` 추가(12.2, 스키마 버전 3). 캔들 비율·ATR 배수의 null 사유 표기(FR-4.2) |
 
 ---
@@ -76,7 +81,7 @@ RSI·MACD·볼린저밴드·이동평균은 모두 종가에서 파생되어 상
 | 결함 | 대응 요구사항 |
 |---|---|
 | P-1 | 모든 수치 계산을 프로그램이 수행 (FR-3.x) |
-| P-2 | 요약에 직전 요약 상태를 포함 (FR-4.4). **부분 대응**: LLM의 판단 자체는 저장하지 않는다(판단 로그는 13장 범위 밖) |
+| P-2 | 요약에 직전 요약 상태를 포함 (FR-4.4). 판단이 낸 조건(계획)은 조건 레지스트리로 저장·추적한다(10.7). 서술형 판단 자체는 저장하지 않는다 |
 | P-3 | 이벤트에 발생 여부뿐 아니라 진행 정도를 포함 (FR-3.12) |
 | P-4 | 프리미엄 인덱스 1분, 미결제약정 5분 주기 사용 (FR-1.3, FR-1.4) |
 | P-5 | 지표를 계열로 분류하여 출력 (FR-3.13) |
@@ -258,7 +263,7 @@ RSI·MACD·볼린저밴드·이동평균은 모두 종가에서 파생되어 상
 | 후속 기능 | 삽입 계층 |
 |---|---|
 | 실시간 체결/청산 수집 | ingest, store |
-| 판단 로그 및 결과 라벨링 | store, report |
+| 판단 서술 로그와 결과 라벨링 (조건 추적은 10.7에서 구현) | store, report |
 | base rate 통계 | compute (신규 모듈) |
 | 이벤트 감지 및 알림 | compute와 report 사이 |
 
@@ -489,6 +494,37 @@ SQLite 단일 파일을 사용한다.
 | params_hash | TEXT | 사용된 설정값의 해시 |
 | state | TEXT | FR-4.4 비교용 주요 상태값 (JSON 문자열) |
 | file_path | TEXT | |
+| params | TEXT | 사용된 파라미터 원문 JSON (저장소 스키마 버전 4부터, FR-4.1 `params_diff`) |
+
+**plan** (저장소 스키마 버전 5, 10.7)
+
+| 컬럼 | 타입 | 비고 |
+|---|---|---|
+| plan_key | TEXT | 기본키. `<source_summary_id>/<plan_id>` |
+| source_summary_id | TEXT | 등록 기준 요약 |
+| spec | TEXT | 입력 원문 JSON(`plan/1`의 계획 하나) |
+| registered_at | INTEGER | 등록 시각(실행 시계) |
+| expires_at | INTEGER | 만료 시각 |
+| cancelled_at | INTEGER | 취소 시각. 없으면 NULL |
+| at_registration | TEXT | 등록 시 계산값 JSON (FR-7.5) |
+| activation_context | TEXT | 활성화 시점 계산값 JSON(활성화 시각, ATR, 동시 조건 결과). 활성화 시각이 바뀌면 다시 계산 |
+| state | TEXT | 마지막 평가의 상태 |
+| evaluation | TEXT | 마지막 평가 결과 JSON(`evaluation_gaps`, `since_activation`) |
+| evaluated_at | INTEGER | 마지막 평가 시각 |
+
+**plan_state_log**
+
+| 컬럼 | 타입 | 비고 |
+|---|---|---|
+| plan_key | TEXT | |
+| seq | INTEGER | 전이 순번. `(plan_key, seq)` 기본키 |
+| state | TEXT | 전이 후 상태 |
+| time | INTEGER | 사건 시각 |
+| price | REAL | 사건 가격(종가 또는 조건 가격) |
+| gap_before | INTEGER | 직전 전이 이후 평가 결측이 있었는지 |
+| evaluated_at | INTEGER | 이 전이를 계산한 평가 시각 |
+
+`plan_state_log`는 파생 테이블이다. 매 평가(FR-7.4)마다 1분봉에서 처음부터 다시 계산해 계획별로 교체한다.
 
 ### 9.3 스키마 원칙
 
@@ -563,7 +599,7 @@ SQLite 단일 파일을 사용한다.
 
 ### 10.3 계산 (compute)
 
-각 지표·이벤트의 정확한 정의(공식, 초기값, 동점 처리, 기본값)는 부록 A(v1.2, 확정)를 따른다. 부록 A와 이 절이 다르면 부록 A가 우선한다.
+각 지표·이벤트의 정확한 정의(공식, 초기값, 동점 처리, 기본값)는 부록 A(v1.4, 확정)를 따른다. 부록 A와 이 절이 다르면 부록 A가 우선한다.
 
 **FR-3.0 결손 표시**
 결손은 불리언이 아니라 비율로 표기한다. 지표값마다 계산 창 안의 결손 비율(누락 1분봉 수 / 기대 1분봉 수)을 함께 산출한다. 봉 단위가 아니라 분 단위로 센다(A.1.3). 이전 값을 이어받는 지표(Wilder 평활 등)도 계산 창 길이를 기준으로 판정하여, 결손 표시가 창 밖으로 영구히 이어지지 않게 한다.
@@ -609,10 +645,10 @@ ATR 기반 ZigZag로 스윙 고점·저점을 식별한다. 반전 임계값은 
 이벤트는 발생 여부와 함께 측정값을 갖는다. 최소 공통 필드는 발생 시각, 경과 봉 수, 관련 타임프레임이며, 유형별로 침투 깊이(ATR 배수), 거래량 배수, 지속 봉 수를 포함한다. 이벤트 유형 목록과 유형별 발생 조건·측정값·보고 기간·계열은 A.8을 따른다.
 
 **FR-3.13 계열 분류**
-모든 지표와 이벤트는 `price_structure`, `regime`, `derivatives`, `level` 중 하나의 계열로 분류되어 출력된다. 펀딩 정보(FR-1.8)는 판단 지표가 아니라 비용 정보이므로 계열 분류 대상이 아니다.
+모든 지표와 이벤트는 `price_structure`, `regime`, `derivatives`, `level`, `flow`, `reference` 중 하나의 계열로 분류되어 출력된다. `reference`는 사용자의 차트 리딩을 검증하기 위한 종가 파생 지표(A.13)이며 새로운 근거가 아니다. 판단의 근거 수에 세지 않는다. `flow`는 1분봉의 taker 체결량에서 나온 체결 흐름이다(A.12). 가격 파생도 포지션 데이터도 아니므로 독립 계열로 둔다. 펀딩 정보(FR-1.8)는 판단 지표가 아니라 비용 정보이므로 계열 분류 대상이 아니다.
 
-**FR-3.14 확률 미산출**
-시스템은 확률, 승률, 기대값을 산출하지 않는다. 해당 필드는 통계 기능 구현 이전까지 존재하지 않는다.
+**FR-3.14 확률 미산출과 과거 빈도 통계**
+시스템은 확률, 승률, 기대값을 산출하지 않는다. 예외로 `statistics` 섹션은 부록 B에 정의된 과거 발생 빈도를 기술한다(CLAUDE.md R-1). 관측 빈도는 과거 표본의 기술이며 다음 사건의 발생 가능성을 뜻하지 않는다. 다른 섹션에는 비율·확률 필드를 두지 않는다.
 
 ### 10.4 요약 (report)
 
@@ -621,18 +657,21 @@ ATR 기반 ZigZag로 스윙 고점·저점을 식별한다. 반전 임계값은 
 
 | 섹션 | 내용 |
 |---|---|
-| `meta` | 요약 ID, 생성 시각, 트리거 종류, 종목, 기준 시각, 기준 가격, 현재가, 스키마 버전, 사용 파라미터와 해시, 시작점(A.1.8), 과거 시점 요약 정보(지정 시각, 공개 지연 미반영 표시, FR-4.8) |
+| `meta` | 요약 ID, 생성 시각, 트리거 종류, 종목, 기준 시각, 기준 가격, 현재가, 스키마 버전(`2`), 파라미터 해시와 직전 요약 대비 변경분(`params_diff`, 전체는 `--full-params`), 시작점(A.1.8), 과거 시점 요약 정보(지정 시각, 공개 지연 미반영 표시, FR-4.8), 세션(`session`, FR-4.9) |
 | `data_freshness` | 실행 시각, 기준 시각이 실행 시각보다 뒤처진 정도, 데이터셋별 최종 시각·실행 시각 대비 경과·경고 여부 (FR-4.3) |
-| `price_structure` | 스윙, BOS/MSS, 되돌림, 캔들 구조 |
+| `price_structure` | 스윙과 고점·저점 관계, 마지막 돌파, 되돌림(확정 파동·진행 파동), 캔들 구조, 가격의 `ref_price` 대비 bp 거리 |
 | `regime` | 타임프레임별 효율성 상태·변동성 상태와 각각의 지속 봉 수, ER·백분위 원값, shock 활성 여부 |
-| `derivatives` | 프리미엄 인덱스(최신 bp, 변화량, 15분 평활 백분위), 계약 수 OI와 4분면, 롱숏 비율 |
+| `derivatives` | 프리미엄 인덱스(최신 bp와 1분 백분위, 변화량, 15분 평활 백분위), 계약 수 OI와 4분면(확정·원시), 롱숏·taker 비율과 백분위 |
+| `flow` | TF별 마지막 마감 봉의 taker 매수·매도 체결량, 델타, 불균형과 그 백분위, 델타 EMA (A.12) |
+| `reference` | TF별 MA·RSI·볼린저 밴드·MACD와 RSI 다이버전스 (A.13, 근거로 세지 않는 참조 지표) |
 | `funding` | 현재 펀딩비, 다음 펀딩 시각, 기준 시각부터 다음 펀딩까지 남은 시간 (비용 정보) |
-| `levels` | 레벨 목록, 구간, 근거, 정규화 거리 |
+| `levels` | 레벨 목록(식별자, 구간, 근거, 정규화 거리와 bp 거리, 터치 횟수) |
 | `events` | 판정된 이벤트 목록과 측정값 |
+| `plans` | 등록된 계획의 상태, 전이 이력, 등록 시·활성화 이후 계산값 (FR-7.6) |
 | `state` | 직전 요약 ID와 생성 시각, 직전 대비 주요 변화 |
-| `statistics` | 통계 미구현 표시 |
+| `statistics` | 과거 발생 빈도 통계(부록 B). 현재 상태에 해당하는 버킷만 싣는다 |
 | `gaps` | 계산 구간 내 결측과 취득 실패 |
-| `unavailable` | 이번 버전에서 제공되지 않는 데이터와 사유: 청산(`source_unavailable`), 체결 기반 지표(`not_implemented`), 통계(`not_implemented`) |
+| `unavailable` | 이번 버전에서 제공되지 않는 데이터와 사유: 청산(`source_unavailable`), 체결 규모 분포(`not_implemented`), 통계(`not_implemented`) |
 
 **기준 시각과 기준 가격**
 - 기준 시각(`ref_time`): 마지막 마감 1분봉의 `close_time + 1` (다음 분의 시작 시각).
@@ -641,10 +680,13 @@ ATR 기반 ZigZag로 스윙 고점·저점을 식별한다. 반전 임계값은 
 - 마크 가격은 사용하지 않는다.
 
 **표기 규칙**
-- 캔들 항목은 null 사유를 둘로 나눠 싣는다. `ratio_null_reason`(범위 0이면 `zero_denominator`)과 `atr_null_reason`(직전 봉 ATR이 없으면 그 사유, 0이면 `zero_denominator`). 부재 봉은 `null_reason = absent_bar`다.
+- 캔들 항목은 `absent`(불리언)를 갖는다. 부재 봉은 `{bar_time, absent: true}`만 싣는다. 존재하는 봉은 null 사유를 둘로 나눠 싣는다. `ratio_null_reason`(범위 0이면 `zero_denominator`)과 `atr_null_reason`(직전 봉 ATR이 없으면 그 사유, 0이면 `zero_denominator`).
+- 방향이 있는 사실은 관측으로만 서술한다: 캔들 `close_vs_open` ∈ `above`/`below`/`equal`, ER의 `er_direction` ∈ `up`/`down`/`flat`(`C_t − C_{t−n}`의 부호, ER이 `null`이면 `null`).
+- 가격에는 `distance_bp = (가격 − ref_price) / ref_price × 10000`(부호 유지)을 붙인다. 대상: 레벨 `center`·`zone_low`·`zone_high`, 스윙 `price`, 잠정 후보 `price`.
+- 파라미터: 기본 출력은 `params_hash`다. 직전 요약과 해시가 다르면 `params_diff`(변경된 키의 이전 값과 새 값)를 싣는다. 직전 요약에 파라미터 원문이 없으면 `params_diff`는 `null`, 사유 `previous_params_unavailable`. `--full-params`는 전체 `params`를 싣는다. `--compact`는 들여쓰기 없이 출력한다.
 - 값이 매우 작은 원값은 단위를 바꿔 싣는다. Parkinson 변동성은 `parkinson_bp`(σ × 10000), 4분면의 `dOI`·`dPx`는 `d_oi_percent`·`d_px_percent`(× 100)다. 비율 자릿수(기본 3자리)로 반올림하면 원값의 유효 숫자가 사라지기 때문이다.
 - 요약 JSON 안의 시각은 UTC 문자열(`YYYY-MM-DDTHH:MMZ`)로 쓴다. 경과는 `bars_ago` 등 정수 필드로 따로 준다.
-- 숫자는 직렬화할 때만 반올림한다(A.1.5). 자릿수는 설정값이다(기본: 가격 2자리, ATR 배수·비율 3자리, bp 2자리, 백분위 1자리).
+- 숫자는 직렬화할 때만 반올림한다(A.1.5). 자릿수는 설정값이다(기본: 가격 2자리, ATR 배수·비율 3자리, bp 2자리, 백분위 1자리, 체결량 3자리).
 - 확정 스윙은 타임프레임마다 최근 N개(설정값, 기본 6)를 싣는다.
 
 **FR-4.2 결손 표기**
@@ -657,7 +699,7 @@ ATR 기반 ZigZag로 스윙 고점·저점을 식별한다. 반전 임계값은 
 - 기준 시각이 실행 시각보다 뒤처진 정도(`ref_time_lag`)를 함께 싣는다.
 
 **FR-4.4 상태 연속성**
-직전 요약의 ID와 생성 시각을 포함한다. 직전 요약이 존재하면 주요 상태값의 변화 여부를 기록한다. 비교 대상은 타임프레임별 `efficiency_state`·`volatility_state`·`structure_state`와 기간별 `quadrant`다. 비교에는 `summary_log.state`를 사용한다. 직전 요약과 `params_hash`가 다르면 파라미터가 바뀌었음을 표시한다.
+직전 요약의 ID와 생성 시각을 포함한다. 직전 요약이 존재하면 주요 상태값의 변화 여부를 기록한다. 비교 대상은 타임프레임별 `efficiency_state`·`volatility_state`·`structure_state`와 기간별 `quadrant`(확정 상태, A.5.1)다. 비교에는 `summary_log.state`를 사용한다. 직전 요약과 `params_hash`가 다르면 파라미터가 바뀌었음을 표시한다.
 
 **FR-4.5 요약 저장**
 생성된 요약을 파일로 저장하고 `summary_log`에 기록한다. 요약 ID는 생성 시각의 UTC 표기(`YYYYMMDDTHHMMSSZ`)이며, 파일명은 `<요약 ID>.json`이다(정렬만으로 시간순이 된다). 저장 폴더는 설정값(기본 `summaries/`)이다.
@@ -669,12 +711,19 @@ ATR 기반 ZigZag로 스윙 고점·저점을 식별한다. 반전 임계값은 
    - 저장된 마지막 1분봉보다 뒤를 지정하면 실행하지 않는다(종료 코드 2). 지정 시각 이전에 저장 1분봉이 하나도 없어도 실행하지 않는다.
    - 시작점 부근이나 워밍업 이전을 지정하면 실행한다. 워밍업이 모자란 지표는 `insufficient_history`로 `null`이다.
 3. 현재 시점에만 조회되는 값(펀딩, 현재가)은 `null`이고 사유는 `not_available_at_ref_time`이다.
-4. 신선도(FR-4.3)는 판정하지 않고 과거 시점 요약임을 표시한다. `meta`에 **공개 지연 미반영**을 표시한다. 저장소에는 그 시각에 실시간으로는 아직 공개되지 않았던 값(예: metrics의 taker 비율은 몇 분 늦게 공개된다)이 이미 채워져 있어, 과거 요약은 그 시각에 실제로 받을 수 있었던 것보다 완전한 데이터를 쓴다. 공개 지연은 시뮬레이션하지 않는다.
+4. 신선도(FR-4.3)는 판정하지 않고 과거 시점 요약임을 표시한다. metrics 값(비율 4종, OI 계약 수)에는 필드 단위로 `possibly_unpublished_at_ref_time`을 붙인다. `ts > ref_time − lag`이면 `true`이며, `lag`은 필드별 설정값 `historical.publication_lag_minutes`(기본 taker 10분, 나머지 5분, `미검증`)다. 현재 시점 요약에서는 항상 `false`다. `meta`에 **공개 지연 미반영**을 표시한다. 저장소에는 그 시각에 실시간으로는 아직 공개되지 않았던 값(예: metrics의 taker 비율은 몇 분 늦게 공개된다)이 이미 채워져 있어, 과거 요약은 그 시각에 실제로 받을 수 있었던 것보다 완전한 데이터를 쓴다. 공개 지연은 시뮬레이션하지 않는다.
 5. `gaps`에는 기준 시각까지의 계산 구간에 걸친 결측만 싣는다.
 6. 저장과 비교: 파일과 `summary_log`에 `trigger = historical`로 저장한다.
    - 현재 시점 요약(`manual`)의 직전 요약은 `manual` 기록 중 가장 최근 것이다. `historical` 기록은 건너뛴다.
    - 과거 시점 요약의 직전 요약은 `historical` 기록 중 **기준 시각이 자신보다 앞선** 것 가운데 기준 시각이 가장 늦은 것이다. 같은 기준 시각이 여럿이면 생성 시각이 늦은 것을 쓴다. 과거 시점을 순서대로 만들면 당시의 연속성이 재현된다.
 7. 결정성: 같은 저장소, 같은 설정, 같은 지정 시각이면 요약 ID·생성 시각을 뺀 내용이 같다. 시작점(A.1.8)은 `meta`에 기록되므로, 이후 더 과거를 적재해 시작점이 바뀌어 결과가 달라지면 원인을 추적할 수 있다.
+
+**FR-4.9 세션 표시 (`meta.session`)**
+- 세션은 현지 시각과 IANA 시간대로 정의하고, 기준 시각(`ref_time`) 시점의 규칙으로 UTC로 바꿔 판정한다. 서머타임이 자동 반영되며, 과거 시점 요약도 그 시각의 규칙을 쓰므로 결정적이다.
+- 기본값(설정 `sessions`): `asia` = Asia/Tokyo 09:00–18:00, `europe` = Europe/London 08:00–16:30, `us` = America/New_York 09:30–16:00. 범위는 시작 포함, 끝 미포함이다. 판정 날짜는 `ref_time`의 현지 날짜다.
+- 출력: `{"label", "active", "null_reason"}`. 기준 시각이 하나의 범위에 들면 그 이름, 둘 이상이면 `overlap_<이름>_<이름>`(설정 순서: asia, europe, us), 어느 범위에도 들지 않으면 `off_session`.
+- 시간대 데이터는 표준 라이브러리 `zoneinfo`로 읽는다. 찾지 못하면 `label`은 `null`, 사유 `timezone_data_unavailable`. Windows에서는 `tzdata` 패키지가 필요할 수 있다(C-2 승인).
+- 세션은 시계 기준 표시이며 휴장일을 반영하지 않는다. 경제 일정은 반영하지 않는다(보류).
 
 **FR-4.7 갱신 실패 시 종료 코드**
 `summary`의 REST 갱신이 실패해도 저장된 데이터로 요약을 만들고(FR-4.6), 종료 코드 1로 끝낸다. 실패는 `gaps`에 기록한다.
@@ -685,7 +734,7 @@ ATR 기반 ZigZag로 스윙 고점·저점을 식별한다. 반전 임계값은 
 ### 10.5 인터페이스 (CLI)
 
 **FR-5.1 명령 구성**
-`init`, `sync`, `summary`, `status` 네 개의 하위 명령을 제공한다.
+`init`, `sync`, `summary`, `status`, `plan` 하위 명령을 제공한다.
 
 | 명령 | 대응 플로우 |
 |---|---|
@@ -693,6 +742,7 @@ ATR 기반 ZigZag로 스윙 고점·저점을 식별한다. 반전 임계값은 
 | `sync` | UF-2 증분 수집 (수동 또는 선택적 스케줄) |
 | `summary` | UF-3 수동 요약. `--at <UTC 시각>`이면 과거 시점 요약(FR-4.8) |
 | `status` | UF-4 상태 점검 |
+| `plan add` / `plan list` / `plan cancel` | 조건 레지스트리 (10.7) |
 
 **FR-5.2 종료 코드**
 정상 종료 0, 부분 실패 1, 실행 불가 2를 반환한다. 스케줄러가 결과를 판별할 수 있어야 한다. 부분 실패는 **이번 실행에서** 데이터 취득에 실패한 경우만 해당한다. 원본 자체의 결측(`source_gap`)이나 이전부터 있던 미해소 결측은 부분 실패로 보지 않는다.
@@ -700,10 +750,98 @@ ATR 기반 ZigZag로 스윙 고점·저점을 식별한다. 반전 임계값은 
 **FR-5.3 진행 표시**
 `init`은 장시간 실행되므로 진행 상황을 출력한다. `sync`는 비대화형 실행을 전제로 출력을 최소화한다.
 
+### 10.7 조건 레지스트리 (plan)
+
+판단 모델이 낸 조건을 기계 판독 가능한 JSON으로 받아 저장하고, 이후 `summary`·`sync` 실행 때 저장된 1분봉으로 **소급 평가**한다. 요약 사이의 공백에서 조건이 언제 충족·무효화되었는지, 진입 위치의 거리 관계가 어땠는지를 프로그램이 계산해 준다. 방향이나 확률을 판정하지 않는다. `side`는 사용자 입력을 되돌려 주는 값이며 프로그램이 판정한 값이 아니다(R-2, 금지어 검사를 예외 없이 통과한다).
+
+**FR-7.1 입력 형식 (`plan/1`)**
+
+```json
+{
+  "schema": "plan/1",
+  "source_summary_id": "20260925T123000Z",
+  "plans": [{
+    "plan_id": "p1",
+    "side": "long",
+    "activation":   {"kind": "close_above", "tf": "15m", "price": 2711.27},
+    "invalidation": {"kind": "close_below", "tf": "15m", "price": 2691.70},
+    "objective":    {"kind": "touch_above", "price": 2742.66},
+    "co_conditions": [{"path": "quadrant.1h", "equals": "oi_up_price_up"}],
+    "expires_at": null
+  }]
+}
+```
+
+- `side` ∈ `long`/`short`. `kind` ∈ `close_above`, `close_below`(`tf` 필수, 계산 대상 TF), `touch_above`, `touch_below`(1분봉 고가·저가, `tf` 없음).
+- `objective`, `co_conditions`, `expires_at`은 선택이다. `expires_at`(UTC `YYYY-MM-DDTHH:MMZ`)이 없으면 등록 기준 요약의 `ref_time` + `plans.default_ttl_hours`.
+- 식별자: `plan_key = "<source_summary_id>/<plan_id>"`. 같은 키가 있으면 거부한다.
+
+**FR-7.2 등록 검증 (`plan add`)**
+오류는 필드 단위로 보고하며, 오류가 있는 계획은 등록하지 않는다.
+- `source_summary_id`가 `summary_log`에 있어야 한다.
+- 가격 순서: `long`은 invalidation < activation < objective, `short`는 invalidation > activation > objective. 어긋나면 거부한다.
+- `touch_*` 조건(activation, objective)이 등록 기준 요약의 `ref_price`에서 이미 충족되어 있으면 거부한다.
+- `co_conditions.path`는 FR-4.4 `state` 항목만 받는다: `timeframes.<tf>.efficiency_state`, `timeframes.<tf>.volatility_state`, `timeframes.<tf>.structure_state`, `quadrant.<period>`. 쿼리 문법은 없다.
+
+**FR-7.3 평가 규칙**
+- 범위: 등록 기준 요약의 `ref_time` 이후 1분봉을 1분씩 순서대로 본다. 등록 시각이 요약보다 늦어도 요약 시점부터 소급한다. 현재 시점 평가는 마지막 저장 1분봉까지, 과거 시점 요약(FR-4.8)은 그 요약의 `ref_time`까지다.
+- 사건 시각: `touch_*` 사건은 그 1분봉 안에서, `close_*` 사건은 해당 TF 봉의 마지막 1분봉 종료 시점에 일어난다. 따라서 **같은 분에서는 touch 사건을 close 사건보다 먼저 처리한다.** 사건 시각은 touch는 그 1분봉의 open_time, close는 TF 봉의 `close_time + 1`로 기록한다.
+- `ambiguous`: 같은 분에 서로 다른 touch 사건 둘이 충족되거나, 서로 다른 TF의 close 사건 둘이 같은 분 종료 시점에 충족될 때만 쓴다. pending 중(activation·invalidation, 그리고 touch 활성화와 같은 분의 objective touch)과 active 중(invalidation·objective)에 모두 적용한다.
+- touch로 활성화된 분의 종료 시점 close 사건은 활성화 이후 사건으로 평가한다(예: touch 활성화 + 같은 분 close 무효화 → active 후 invalidated). close로 활성화된 분의 touch 사건은 활성화 이전이므로 활성화 이후 평가에 쓰지 않는다.
+- **activation (돌파 기준)**: `close_above`는 `C_{t−1} ≤ X < C_t`, `close_below`는 `C_{t−1} ≥ X > C_t`. 첫 평가 TF 봉은 `ref_time` 이후에 마감하는 첫 봉이고, 그 `C_{t−1}`은 `ref_time` 시점의 마지막 마감 TF 봉 종가다. 등록 시 이미 X 너머에 있으면 한 번 되돌아왔다가 다시 넘어야 발동한다.
+- **invalidation, objective (상태 기준)**: 활성화 이후(pending 중의 invalidation 포함) 처음으로 `C_t < X`(close_below), `C_t > X`(close_above), `High ≥ X`(touch_above), `Low ≤ X`(touch_below)가 되는 시점.
+- **결측**: 빠진 1분봉에서는 touch를 판정하지 않는다. 결측 분이 있는 TF 봉은 close 판정에 쓰지 않는다. 돌파 판정은 `C_{t−1}`과 `C_t`가 모두 결측 없는 TF 봉일 때만 하며, 직전 봉이 결측이면 그 다음 봉에서는 판정하지 않고 두 연속 유효 봉이 나오는 시점부터 재개한다. 상태 기준 판정은 결측 봉만 건너뛴다. 건너뛴 구간은 `evaluation_gaps`에 기록하고, 직전 전이(없으면 평가 시작) 이후 결측이 있었던 전이에 `gap_before: true`를 붙인다. 결측을 채우지 않는다(R-3).
+- **만료·취소**: `expires_at`에 도달했을 때 pending이면 `expired`, active면 `expired_active`. `plan cancel`은 pending 계획만 `cancelled`로 바꾸며 취소 시각에 적용한다. 과거 시점 요약에서는 취소 시각이 그 요약의 `ref_time` 이후면 적용하지 않는다.
+
+상태 전이:
+
+```
+pending ──(activation)──────────────→ active
+pending ──(invalidation 선충족)────→ void_before_activation
+pending ──(만료)────────────────────→ expired
+pending ──(취소)────────────────────→ cancelled
+active  ──(invalidation)───────────→ invalidated
+active  ──(objective)──────────────→ objective_reached
+active  ──(만료)────────────────────→ expired_active
+(순서를 알 수 없음) ─────────────────→ ambiguous
+```
+
+**FR-7.4 평가 시점과 저장**
+- `summary`(현재 시점)와 `sync`가 끝난 뒤 모든 미종료 계획과 최근 종료 계획을 1분봉에서 **처음부터 다시 평가**하고 `plan.state`, `plan.evaluation`, `plan_state_log`를 교체한다. 늦게 채워진 결측이 자동으로 반영된다. 결측이 채워지면 전이 시각이 바뀔 수 있으므로 `evaluated_at`을 남긴다.
+- 과거 시점 요약은 저장하지 않고 그 `ref_time`까지 메모리에서 평가한다. 대상은 등록 기준 요약의 `ref_time`이 그 요약의 `ref_time`보다 앞선 계획이다.
+
+**FR-7.5 계산 필드**
+- `at_registration`(등록 기준 요약의 `ref_time`에서 엔진을 다시 계산해 얻는다. 반올림 전 값을 쓴다)
+  - `risk_bp = |activation − invalidation| / activation × 10000`, `risk_atr = |activation − invalidation| / ATR`
+  - `reward_bp`, `reward_atr`: objective가 있으면 같은 방식, 없으면 `null`
+  - ATR은 `levels.normalize_tf`의 마지막 마감 봉 ATR(A.7.2)
+  - `activation_distance_bp = (activation − ref_price) / ref_price × 10000`
+  - `nearest_opposing_level`: long이면 `zone_high > activation`인 레벨 중 가까운 경계 `max(zone_low, activation)`까지 거리가 가장 짧은 레벨(short는 대칭). `level_id`, `boundary`, `distance_bp`, `distance_atr`, `activation_inside_zone`. 해당 레벨이 없으면 `null`
+  - `registration_lag_minutes`: 등록 시각 − 등록 기준 요약의 `ref_time`(분). 판단 시점과 등록 시점의 괴리
+  - `params_changed_since_source`: 등록 기준 요약과 현재 파라미터 해시가 다르면 `true`
+- `since_activation`
+  - `activation_time`, `activation_price`(close는 종가, touch는 조건 가격)
+  - `mfe_bp`·`mae_bp`: 활성화 분 다음 분부터 종료 분(미종료면 마지막 평가 분)까지 1분봉 고가·저가로 잰 최대 순행·역행(0 미만이면 0). 범위가 비었는데 종료되었으면 종료 가격으로 잰다. 범위가 비었고 미종료면 `null`
+  - `mfe_atr`·`mae_atr`: 같은 거리 / 활성화 시점의 `levels.normalize_tf` ATR
+  - `end_time`, `end_reason`(종료 상태), `end_price`(close는 종가, touch는 조건 가격, 만료는 `null`)
+  - `bars_to_end`: activation TF 봉 수. touch 활성화는 분 수
+- `co_conditions_at_activation`: 활성화 시점으로 엔진을 다시 계산해 경로별 `value`와 `met`을 기록한다. 상태 전이를 막지 않는다.
+
+**FR-7.6 요약 섹션 `plans`**
+pending·active 계획과, 종료 시각이 기준 시각 전 `plans.report_hours` 안인 계획을 싣는다. 각 계획: `plan_key`, 입력 원문, `state`, 전이 이력(`state`, `time`, `price`, `gap_before`), `expires_at`, `at_registration`, `since_activation`, `co_conditions_at_activation`, `evaluation_gaps`. 시각은 UTC다.
+
+**FR-7.7 명령**
+
+| 명령 | 동작 |
+|---|---|
+| `plan add <파일 또는 ->` | 검증 후 등록. `plan_key`와 `at_registration`을 출력한다 |
+| `plan list [--all]` | 기본은 pending·active. `--all`은 전체 |
+| `plan cancel <plan_key>` | pending 계획을 `cancelled`로 |
+
 ### 10.6 설정
 
 **FR-6.1 설정 파일**
-모든 파라미터를 단일 설정 파일에서 관리한다. 형식은 TOML이며 표준 라이브러리 `tomllib`로 읽는다. 섹션 구분: `data`, `indicators`, `regime`, `derivatives`, `levels`, `events`, `compute`, `report`, `runtime`.
+모든 파라미터를 단일 설정 파일에서 관리한다. 형식은 TOML이며 표준 라이브러리 `tomllib`로 읽는다. 섹션 구분: `data`, `indicators`, `regime`, `derivatives`, `levels`, `events`, `compute`, `report`, `historical`, `plans`, `runtime`.
 
 **FR-6.2 기본값**
 모든 설정 항목은 기본값을 가지며, 설정 파일 없이도 실행 가능하다.
@@ -810,13 +948,13 @@ ATR 기반 ZigZag로 스윙 고점·저점을 식별한다. 반전 임계값은 
 | 항목 | 제외 사유 | 삽입 계층 |
 |---|---|---|
 | 1초 버킷 체결 집계 | REST 24시간 제약으로 대량 취득에 아카이브 연동이 선행되어야 함 | ingest, compute |
-| 체결 기반 지표 (델타 EMA, 거래 강도, Kyle's lambda) | 체결 수집 선행 필요 | compute |
+| 체결 기반 지표 (체결 규모 분포, 거래 강도, Kyle's lambda). 1분봉 taker 체결량 기반 델타·델타 EMA는 A.12에서 구현 | 체결 수집 선행 필요 | compute |
 | 내재 청산 불일치 플래그 | 체결 수집 선행 필요 | compute |
 | 청산 수집 및 청산 의존 지표 | 실시간 수집기 부재, 과거 복원 불가 | ingest |
 | 거래량·OI 프로파일 | 레벨 강도 산출과 함께 구현 | compute |
 | 레벨 강도 점수 | 과거 반응 이력 필요 | compute |
-| MAE/MFE, base rate | 누적 데이터 필요 | compute (신규) |
-| 판단 로그 및 결과 라벨링 | 검증 1단계 이후 | store, report |
+| base rate 중 S-1 외 통계(레벨 터치 차수별 반응 S-2 등), 통계 캐시 | 계획 등록 사용 데이터 확인 후 결정 | compute |
+| 판단 서술 로그와 결과 라벨링 (조건 추적은 10.7로 이동) | 검증 1단계 이후 | store, report |
 | 이벤트 감지 및 알림 | 유효 이벤트 식별 이후 | compute/report 사이 |
 | 실시간 수집기 | 별도 장비 구성 이후 | ingest |
 | 레짐 확신도 합성, 통합 취약성 지수 | 가중치 검증 데이터 부재 | compute |
@@ -909,7 +1047,7 @@ taker 비율의 시각 의미는 아카이브 1분봉의 taker 매수량으로 �
 
 ---
 
-## 부록 A. 계산 정의와 이벤트 목록 (v1.2, 확정)
+## 부록 A. 계산 정의와 이벤트 목록 (v1.4, 확정)
 
 **확정의 의미**: 정의(공식, 처리 순서, 경계 조건, 출력 형식)가 확정되었다는 뜻이다. 파라미터 값이 검증되었다는 뜻이 아니다. 각 항목의 `미검증` 표기는 그대로 유지되며, 값은 검증 단계에서 설정 파일로 조정한다. 정의를 바꾸려면 이 부록의 버전을 올린다.
 
@@ -1016,6 +1154,7 @@ taker 비율의 시각 의미는 아카이브 1분봉의 taker 매수량으로 �
 - `body_ratio = |C − O| / range`
 - `body_atr = |C − O| / ATR_{t−1}` (A.1.7)
 - `range_atr = range / ATR_{t−1}`
+- `close_vs_open` ∈ `above`/`below`/`equal`
 - 보고 범위: TF별 최근 `K`개 마감 봉. 기본 `K = 5`.
 
 **A.3.2 스윙 (ATR-ZigZag)** — 검증 상태: `미검증`(k)
@@ -1070,12 +1209,21 @@ taker 비율의 시각 의미는 아카이브 1분봉의 taker 매수량으로 �
 
 최근 확정 스윙 고점 2개(`SH1` 최신, `SH0` 이전)와 저점 2개(`SL1`, `SL0`)로 판정한다.
 
+관계 판정(v1.3): 두 스윙의 차가 허용 오차 미만이면 같다고 본다.
+- `tol = equal_tol_atr × ATR_{c−1}`. `c`는 두 스윙 중 나중 스윙의 확정 봉, `ATR_{c−1}`은 그 직전 봉의 같은 TF ATR이다.
+- `|X1 − X0| < tol`이면 `equal`, 아니면 `X1 > X0`이면 `higher`, `X1 < X0`이면 `lower`.
+- `ATR_{c−1}`이 `null`이면 관계는 `null`이다. 엄격 비교로 대신하지 않는다.
+- 출력: `high_relation`, `low_relation`.
+
 | 조건 | `structure_state` |
 |---|---|
-| SH1 > SH0 그리고 SL1 > SL0 | `higher_highs_higher_lows` |
-| SH1 < SH0 그리고 SL1 < SL0 | `lower_highs_lower_lows` |
-| 그 외 (같음 포함) | `mixed` |
-| 고점 또는 저점이 2개 미만 | `insufficient` |
+| 고점 또는 저점이 2개 미만, 또는 관계가 `null` | `insufficient` |
+| high_relation = higher 그리고 low_relation = higher | `higher_highs_higher_lows` |
+| high_relation = lower 그리고 low_relation = lower | `lower_highs_lower_lows` |
+| 그 외 (`equal` 포함) | `mixed` |
+
+- 기본값: `equal_tol_atr = 0.1`. 검증 상태 `미검증`.
+- 5/29 12:05 재현에서 1h 저점 1966.15 대 1965.48(차 0.67, ATR 12.45의 0.05배)이 상승 구조로 분류되어 레이블이 과장된 사례가 계기다.
 
 구조 상태는 새 스윙이 확정될 때만 갱신된다.
 
@@ -1107,6 +1255,7 @@ taker 비율의 시각 의미는 아카이브 1분봉의 taker 매수량으로 �
 | 위/아래 | mixed / insufficient | 무관 | `break_unclassified` |
 
 - 변위 충족: `displacement_mult ≥ m`.
+- **마지막 돌파(`last_break`)**: TF별로 방향과 무관하게 가장 최근 돌파 1건(`side`, `break_kind`, `swing_price`, `bar_time`, `bars_ago`). 보고 기간 제한이 없으며 시작점 이후 전체에서 찾는다. 돌파가 없으면 `null`. 구조 상태는 새 스윙 확정 때만 갱신되므로, 돌파 직후의 사실은 이 필드가 맡는다.
 - 기본값: `m = 1.5`, `N = 20`.
 
 **A.3.5 되돌림** — 검증 상태: `미검증`
@@ -1118,6 +1267,8 @@ taker 비율의 시각 의미는 아카이브 1분봉의 taker 매수량으로 �
 - **0~1로 자르지 않는다.** 음수는 기준 파동 극점을 넘어선 상태, 1 초과는 파동 시작점을 넘어선 상태다.
 - `time_ratio = (현재 TF 봉 인덱스 − P_b 봉 인덱스) / (P_b 봉 인덱스 − P_a 봉 인덱스)`
 - 분모 0이면 `null`.
+- **진행 파동 기준(`retracement_tentative`, v1.3)**: 마지막 확정 스윙 `P_b`에서 잠정 후보 `C`(A.3.2)까지의 파동. `C`가 고점 후보(`dir = up`)이면 `depth = (C − ref_price) / (C − P_b)`, 저점 후보(`dir = down`)이면 `depth = (ref_price − C) / (P_b − C)`. 분모 0이거나 확정 스윙·잠정 후보가 없으면 `null`. 0~1로 자르지 않는다.
+- 두 되돌림 객체 모두 `basis: "ref_price"`를 싣는다.
 
 ---
 
@@ -1137,6 +1288,7 @@ FR-3.7의 분류를 **두 개의 독립 축**으로 출력한다. 두 축을 하
 | 그 사이 | `transition` |
 
 - 기본값: `n = 10`, `er_trend = 0.5`, `er_range = 0.3`.
+- `er_direction`: `C_t − C_{t−n}`의 부호로 `up`/`down`/`flat`. ER이 `null`이면 `null`.
 - 히스테리시스를 적용하지 않는다.
 
 **A.4.2 변동성 축** — 검증 상태: `미검증`(임계값)
@@ -1189,19 +1341,14 @@ A.2.2의 Parkinson 백분위를 사용한다.
   - `Px_{t−P}`: `close_time = ts − P − 1`인 1분봉의 close. 없으면 `null`.
   - `dOI = (OI_t − OI_{t−P}) / OI_{t−P}`
   - `dPx = (Px_t − Px_{t−P}) / Px_{t−P}`
-- 불감대: `|dOI| < oi_band`이면 OI 무변화, `|dPx| < px_band`이면 가격 무변화.
-
-| dOI | dPx | `quadrant` |
-|---|---|---|
-| 증가 | 상승 | `oi_up_price_up` |
-| 증가 | 하락 | `oi_up_price_down` |
-| 감소 | 상승 | `oi_down_price_up` |
-| 감소 | 하락 | `oi_down_price_down` |
-| 무변화 또는 가격 무변화 | — | `indeterminate` |
-
-- `dOI` 또는 `dPx`가 `null`이면 `quadrant`도 `null`이다.
-- 기본값: `P ∈ {1h, 4h}`, `oi_band = 0.001`(0.1%), `px_band = 0.001`.
-- 원값 `dOI`, `dPx`를 함께 출력한다.
+- **원시 상태(v1.3, 3×3)**: 축마다 `|d| ≤ band`이면 `flat`, 아니면 부호에 따라 `up`/`down`. 레이블은 `oi_{up|flat|down}_price_{up|flat|down}`.
+- **불감대 `band`(분포 기준)**: 기간 `P`, 스냅샷 `ts`마다 `ts`까지 5분 격자 최근 `L`개(현재 포함)의 `|d|` 표본을 축별로 모은다. 결측(`null`)은 표본에서 빼고, 표본 수 / `L`이 `min_coverage` 미만이면 그 시각의 원시 상태는 `null`, 사유 `insufficient_coverage`. 표본을 오름차순 정렬해 `floor(q/100 × (M−1))`번째 값(M은 표본 수, 0부터, 보간 없음)을 `band`로 쓴다.
+  - ATR 기준을 쓰지 않는 이유: 4h 같은 비계산 기간에는 대응 ATR이 없다. 백분위 기준은 OI와 가격에 같은 방식으로 적용된다.
+- **확정 상태**: 같은 원시 상태가 5분 격자에서 `m`회 연속하면 확정 상태를 그 값으로 갱신한다. `null`이 끼면 연속이 끊긴다. 확정 상태 계산은 기준 시각 전 `2 × report_minutes`(A.8.2의 `quadrant_change` 보고 기간의 두 배)부터 한다. 이 범위의 시작 전 상태는 알 수 없으므로 `duration_snapshots`가 범위 시작에 닿으면 `duration_capped: true`를 싣는다. 범위가 기준 시각에만 의존하므로 같은 기준 시각이면 결과가 같다(FR-4.8).
+- 출력: `quadrant_confirmed`, `quadrant_raw`, `confirmed_since`(확정 상태가 그 값이 된 스냅샷 시각), `duration_snapshots`(그 이후 스냅샷 수), `d_oi_percent`, `d_px_percent`, `band_oi_percent`, `band_px_percent`.
+- `dOI` 또는 `dPx`가 `null`이면 원시 상태도 `null`이다.
+- 기본값: `P ∈ {1h, 4h}`, `L = 2016`(7일), `q = 30`, `m = 3`(15분), `min_coverage = 0.9`. 검증 상태 `미검증`.
+- v1.2까지의 고정 불감대(`oi_band`, `px_band`)와 `indeterminate` 값은 없앤다. 한쪽 축이 불감대 안이면 전체가 `indeterminate`가 되어 "포지션 감소·가격 정체" 같은 정보가 사라졌고, 5분마다 드나드는 흔들림이 컸기 때문이다.
 - 주: `metrics_5m.ts`는 5분 구간의 끝 시각(스냅샷 시각)으로 정규화되어 저장된다(8.4, 15.7). 따라서 위 `Px_t` 정렬이 맞다.
 
 **A.5.2 프리미엄 인덱스** — 검증 상태: `미검증`(기간·룩백)
@@ -1212,9 +1359,18 @@ A.2.2의 Parkinson 백분위를 사용한다.
 - **평활값**: 평활 TF(기본 `15m`) 봉마다, 구간 내 1분 프리미엄 close의 산술평균(bp). 결측 분이 있으면 있는 값으로 평균을 내고 `missing_ratio`를 표기한다. 전부 없으면 부재 봉이다.
 - **분포 위치**: 마지막 마감 평활 봉의 평활값을, 최근 `L`개 평활값(현재 포함)에 대한 A.1.6 백분위로 산출한다. 창에 부재 봉이 있으면 A.1.3에 따라 `null`. 안정된 상대 위치를 맡는다.
 - 0 기준 부호 전환은 판정하지 않는다. 실측상 최근 1년 1분봉 종가의 99.2%가 음수이므로 0은 중립 기준이 아니다(8.4). 절대 수준은 펀딩비(A.5.3)가 제공한다.
-- 기본값: `W ∈ {15m, 1h, 4h}`, 평활 TF `15m`, `L = 672`(15분 봉 7일).
+- **현재값 분포 위치(`current_pct`, v1.3)**: 현재값을 최근 `L1`개 1분 close(현재 포함)에 대한 A.1.6 백분위로 산출한다. 결측은 표본에서 빼고, 표본 수 / `L1`이 `min_coverage` 미만이면 `null`, 사유 `insufficient_coverage`. 평활 백분위(`smoothed.pct`)와 필드명을 나눈다. 평활값과 현재값이 어긋날 때 판독하기 위함이다.
+- 기본값: `W ∈ {15m, 1h, 4h}`, 평활 TF `15m`, `L = 672`(15분 봉 7일), `L1 = 10080`(1분 7일), `min_coverage = 0.9`.
 
 평활을 택한 이유: 흔들림의 원인은 샘플 12개짜리 1분 값의 측정 노이즈다. 유지 조건은 원인을 그대로 둔 채 판정만 늦추고 상태와 파라미터를 늘린다. 평활은 원인을 직접 줄인다. 평활 TF를 15분으로 맞추면 판정 주기가 결정 타임프레임과 일치하고, 이벤트 보고 기간(15m)을 그대로 쓸 수 있다.
+
+**A.5.4 비율 지표 백분위** — 검증 상태: `미검증`(룩백·채움률)
+
+- 대상: `top_position_ratio`, `top_account_ratio`, `global_account_ratio`, `taker_buy_sell_ratio`.
+- 각 값의 `ts`까지 5분 격자 최근 `L`개(현재 포함)에서 결측을 뺀 표본으로 A.1.6 백분위를 산출한다. `pct`와 `sample_n`을 싣는다.
+- 표본 수 / `L`이 `min_coverage` 미만이면 `pct`는 `null`, 사유 `insufficient_coverage`. 결측을 빼되 채움률 하한을 두는 것은 A.1.3(창에 부재가 있으면 null)을 완화한 것이다. taker 값은 결측이 잦아 부재 한 칸으로 값이 사라지지 않게 하되, 표본이 크게 비면 내지 않는다.
+- 기본값: `L = 2016`(7일), `min_coverage = 0.9`.
+- 극단 이벤트는 만들지 않는다.
 
 **A.5.3 펀딩 (비용 정보)** — 필드명은 2026-09-24 실응답으로 확인. 가중치는 `확인 필요`(15.6)
 
@@ -1270,6 +1426,18 @@ A.2.2의 Parkinson 백분위를 사용한다.
 - 보고 범위: ref_price 위아래 각각 가장 가까운 `R`개.
 - 기본값: `merge_dist = 0.5`, `w = 0.25`, `R = 5`.
 - 레벨 강도 점수는 산출하지 않는다(FR-3.11).
+- `level_id`(v1.3): 구성원 `(source, price)`를 정렬해 SHA-1 해시를 만들고 앞 8자리에 `lv_`를 붙인다. 가격은 소수 8자리로 표기해 해시한다. **한 요약 안에서만 유효하며 요약 사이의 연속성을 보장하지 않는다.** 새 구성원이 합류하면 식별자가 바뀐다.
+- `center`, `zone_low`, `zone_high`에 `distance_bp`를 붙인다(FR-4.1).
+
+**A.7.5 터치 횟수** — 검증 상태: `미검증`
+
+- 대상 TF: 설정값 `levels.touch_tf`(기본 `15m`). `indicators.timeframes`에 포함되어야 한다.
+- 레벨마다 스윙 구성원 중 가장 이른 `known_time` 이후 첫 봉부터 마지막 마감 봉까지 본다.
+- 봉마다 그 봉 시작 시점에 알려진 스윙 구성원(`known_time ≤ open_time`)으로 zone을 다시 만든다(A.8.3과 같은 규칙). `vwap_24h`, `high_24h`, `low_24h` 구성원은 과거 값이 없으므로 제외한다. 알려진 구성원이 없는 봉은 판정하지 않는다.
+- 봉의 [저가, 고가]가 zone(양끝 포함)과 겹치면 그 봉은 "안"이다. **"안"이 연속된 구간 하나를 터치 1회**로 센다.
+- 부재 봉은 연속을 끊고 판정하지 않는다. 판정하지 못한 부재 봉 수를 `absent_bars`로 싣는다.
+- 출력: `touch_count`, `last_touch_bars_ago`(마지막 "안" 봉의 경과 봉 수), `absent_bars`. 스윙 구성원이 없는 레벨은 `null`, 사유 `no_swing_member`.
+- 강도 점수가 아니라 관측 횟수다(R-7).
 
 ---
 
@@ -1305,7 +1473,7 @@ TF별로 최근 `R_tf`개 마감 봉 안에서 발생한 이벤트만 보고한�
 | `level_wick_into_zone` | level | 레벨 이벤트 TF | 봉의 high 또는 low가 zone에 들어갔으나, `C_{t−1}`과 `C_t`가 모두 zone 밖 같은 쪽 | `level_center`, `penetration_atr`, `source_count` |
 | `level_close_into_zone` | level | 레벨 이벤트 TF | `C_{t−1}`이 zone 밖, `C_t`가 zone 안 | `level_center`, `source_count` |
 | `level_close_through_zone` | level | 레벨 이벤트 TF | `C_{t−1}`과 `C_t`가 zone의 서로 반대편 밖 | `level_center`, `close_beyond_atr`, `source_count` |
-| `quadrant_change` | derivatives | 5m 기준 | 기간 P의 확정 4분면(`indeterminate`·`null`이 아닌 값)이 직전 확정 4분면과 다름. `indeterminate`와 `null`은 건너뛰며 변화의 양 끝점으로 쓰지 않는다 | `period`, `from`, `to`, `d_oi`, `d_px` |
+| `quadrant_change` | derivatives | 5m 기준 | 기간 P의 확정 상태(A.5.1)가 바뀜 | `period`, `from`, `to`, `d_oi`, `d_px` |
 | `premium_extreme` | derivatives | 평활 TF (15m) | 직전 평활 봉에서는 극단 구간이 아니었고, 이번 평활 봉에서 극단 구간 (백분위 ≥ `p_high` 또는 ≤ `p_low`) | `side`(`high`/`low`), `value_bp`(평활값), `pct` |
 
 - 레벨 이벤트 TF: 설정값 `events.level.timeframes` (기본 `15m`). 레벨 이벤트의 zone 판정도 양끝 포함 폐구간이다.
@@ -1315,9 +1483,10 @@ TF별로 최근 `R_tf`개 마감 봉 안에서 발생한 이벤트만 보고한�
   - 구성원을 걸러낸 뒤 zone과 center는 **남은 구성원으로 다시 계산**한다(`center` = 남은 구성원 평균, `zone = [남은 최소 − w × ATR_1h, 남은 최대 + w × ATR_1h]`). 클러스터는 다시 나누지 않는다. 최소 가격 기준 병합이므로 구성원을 빼도 클러스터 폭 제한이 유지된다.
   - 남은 구성원이 없는 클러스터는 그 봉의 판정에서 제외한다.
   - 허용하는 잔여 미래 참조: 정규화에 쓰는 ATR_1h는 기준 시각 값이다. 척도에만 영향을 주므로 허용한다. `vwap_24h`는 현재 봉의 거래량을 포함한다.
+- 레벨 이벤트는 `level_id`를 싣는다. 그 봉에서 걸러진 구성원을 모두 포함하는 현재 레벨의 식별자이며, 그런 레벨이 없으면 `null`이다.
 - `penetration_atr`: zone 가장자리부터 봉의 극값까지 zone 안쪽으로 들어간 거리 / 기준 시각의 ATR_1h.
 - 레벨 이벤트의 `close_beyond_atr`: zone 가장자리부터 `C_t`까지의 거리 / 기준 시각의 ATR_1h.
-- `quadrant_change`의 직전 확정 4분면은 보고 기간 시작 전 `report_minutes` 안에서 찾는다. 그 안에 확정 4분면이 없으면 보고 기간의 첫 확정 4분면은 이벤트를 만들지 않는다(`from`을 정할 수 없다). 불감대 경계 근처에서 5분마다 `indeterminate`로 드나드는 흔들림이 이벤트 수로 불어나 근거의 수로 오인되는 것을 막기 위함이다. 현재 4분면이 `indeterminate`라는 사실은 `derivatives`와 `state`에 남는다.
+- `quadrant_change`는 확정 상태(지속 조건 `m`회)의 변화에만 발생한다. v1.2의 `indeterminate` 건너뛰기 규칙은 이것으로 대체한다.
 - 거래량 이벤트 TF: 설정값 `events.volume_spike.timeframes` (기본 `15m`, `30m`, `1h`).
 - `volume_spike` 기본값: `N = 20`, `v_th = 2.0`.
 - `premium_extreme` 기본값: `p_high = 95`, `p_low = 5`. 보고 기간은 평활 TF의 보고 기간(`15m = 16`)을 따른다.
@@ -1334,6 +1503,59 @@ TF별로 최근 `R_tf`개 마감 봉 안에서 발생한 이벤트만 보고한�
 모든 type, state, side 값은 **관측된 사실을 서술**하며 방향 판단을 함의하지 않는다. `bullish`, `bearish`, `long_signal`, `buy`, `sell`, `support`, `resistance` 등 행동이나 역할을 함의하는 단어를 사용하지 않는다. `support`/`resistance`는 레벨의 역할을 단정하므로 제외하고 `level_above`/`level_below`로 표기한다. 금지어는 CLAUDE.md R-2 목록을 따른다.
 
 ---
+
+### A.12 체결 흐름 (`flow`) — 검증 상태: `미검증`(EMA 기간·룩백)
+
+1분봉의 `taker_buy_volume`과 `volume`으로 계산한다. aggTrades를 수집하지 않는다.
+
+- 합성 봉(A.1.1)은 `taker_buy_volume`도 합산한다.
+- `taker_buy = Σ taker_buy_volume`, `taker_sell = volume − taker_buy`, `delta = taker_buy − taker_sell`.
+- `imbalance = delta / volume`. `volume = 0`이면 `null`(A.1.4).
+- `delta_ema`: 기간 `n`. 첫 값은 사용 가능한 첫 `n`개 `delta`의 산술평균이며 `n`번째 봉에 부여한다. 이후 `EMA_t = EMA_{t−1} + α(delta_t − EMA_{t−1})`, `α = 2/(n+1)`. 부재 봉 뒤에는 ATR(A.2.1)처럼 다시 시작한다. 고정 시작점(A.1.8)부터 계산한다.
+- `imbalance_pct`: 마지막 마감 봉의 `imbalance`를 최근 `L`봉(현재 포함)에 대한 A.1.6 백분위로 산출한다. 창에 부재 봉이나 `null`이 있으면 `null`.
+- 출력: TF별 마지막 마감 봉의 `taker_buy`, `taker_sell`, `delta`, `imbalance`, `imbalance_pct`, `delta_ema`, `bar_time`.
+- 기본값: `n = 15`, `L = 100`. 이번 버전은 `flow` 계열 이벤트를 만들지 않는다.
+- **해석 한계**: 체결 델타는 공격적으로 체결한 쪽(taker)의 매수·매도 방향만 알려준다. 미결제약정 증감의 롱·숏 구성은 알려주지 않는다. 계약마다 롱과 숏이 한 쌍이기 때문이다. 해석 레이블을 만들지 않는다(R-2). 1분봉 거래량을 "전체 거래량"으로 서술하지 않는다(D-7).
+
+---
+
+### A.13 참조 지표 (`reference`) — 검증 상태: `미검증`(전 기간·임계값)
+
+사용자의 차트 리딩(MA, RSI, BB, MACD)을 검증하기 위한 종가 파생 지표다. 새로운 근거가 아니며 판단의 근거 수에 세지 않는다(FR-3.13). 이벤트를 만들지 않는다.
+
+**공통**
+- 대상 TF: 설정 `reference.timeframes`(기본 `15m`, `1h`). `indicators.timeframes`에 포함되어야 한다.
+- 창 안에 부재 봉이 있으면 `null`(A.1.3). 재귀형(EMA, RSI)은 부재 봉 뒤에 다시 시작하고 고정 시작점(A.1.8)부터 계산한다. EMA의 첫 값은 첫 `n`개의 산술평균, 이후 `α = 2/(n+1)`.
+- 값은 마지막 마감 봉 기준이다.
+
+**A.13.1 MA**
+- 기간 `reference.ma.periods`(기본 [5, 20, 60]), 종류 `reference.ma.kind` ∈ `sma`/`ema`(기본 `sma`).
+- 출력: 기간별 `value`, `distance_bp`(FR-4.1).
+- 배열(`order`): 기간 오름차순으로 인접한 두 MA의 차가 `equal_tol_atr × ATR_{t−1}`(같은 TF, A.1.7) 미만이면 같은 값으로 본다.
+  - 모든 인접 쌍에서 짧은 기간 MA − 긴 기간 MA ≥ 허용 오차 → `fast_above_slow`
+  - 모든 인접 쌍에서 긴 기간 MA − 짧은 기간 MA ≥ 허용 오차 → `fast_below_slow`
+  - 그 밖(같은 값 포함) → `mixed`
+  - MA 중 하나라도 `null`이거나 `ATR_{t−1}`이 없으면 `null`.
+  - 기본 `equal_tol_atr = 0.1`. 목적은 MA가 붙어 있을 때 레이블이 매 봉 뒤집히는 것을 막는 것이다(A.3.3과 같은 방식).
+
+**A.13.2 RSI**
+- 기간 `n`(기본 14), Wilder. 첫 값은 첫 `n`개 종가 변화의 평균 상승폭·평균 하락폭, 이후 `avg_t = (avg_{t−1} × (n − 1) + x_t) / n`.
+- `RSI = 100 − 100 / (1 + 평균 상승폭 / 평균 하락폭)`. 평균 하락폭이 0이고 평균 상승폭이 양수이면 100, 둘 다 0이면 `null`(`zero_denominator`).
+
+**A.13.3 볼린저 밴드**
+- 기간 `n`(기본 20), 폭 `k`(기본 2). 중심 = SMA, σ = 창의 모표준편차, 상단·하단 = 중심 ± kσ.
+- 출력: `upper`, `lower`, `percent_b = (C − lower) / (upper − lower)`(상단 = 하단이면 `null`), `width = (upper − lower) / 중심`, `width_pct`(최근 `width_lookback`봉, 기본 100, A.1.6).
+
+**A.13.4 MACD**
+- `fast`, `slow`, `signal`(기본 12, 26, 9). MACD = EMA_fast − EMA_slow, 시그널 = MACD의 EMA_signal, `histogram` = MACD − 시그널.
+- 출력: `histogram`, `histogram_side` ∈ `above_zero`/`below_zero`/`zero`, `bars_since_side_change`(히스토그램 부호가 직전 봉과 달라진 가장 최근 봉까지의 봉 수. 계산 구간 안에 전환이 없거나 부재로 끊기면 `null`).
+
+**A.13.5 RSI 다이버전스**
+- 같은 유형의 최근 확정 스윙 두 개(그 TF의 A.3.2)를 고점 쌍과 저점 쌍으로 따로 비교한다.
+- 가격 관계: A.3.3의 관계 판정(허용 오차 포함).
+- RSI 관계: 각 스윙 극점 봉의 종가 기준 RSI. 차가 `reference.rsi.equal_tol`(기본 1.0) 미만이면 `equal`.
+- 출력: `highs`, `lows` 각각 `relation`(예: `price_higher_rsi_lower`), `known_time`(나중 스윙). 스윙이 모자라거나 RSI·관계가 `null`이면 `null`.
+- 서술형 값만 쓴다. 방향 판단 어휘는 쓰지 않는다(R-2).
 
 ### A.9 워밍업과 init 기본 기간
 
@@ -1376,6 +1598,9 @@ TF별로 최근 `R_tf`개 마감 봉 안에서 발생한 이벤트만 보고한�
 | `indicators.zigzag.k` | 2.0 | A.3.2 |
 | `indicators.structure.displacement_mult` | 1.5 | A.3.4 |
 | `indicators.structure.displacement_lookback` | 20 | A.3.4 |
+| `indicators.structure.equal_tol_atr` | 0.1 | A.3.3 |
+| `indicators.flow.ema_n` | 15 | A.12 |
+| `indicators.flow.pct_lookback` | 100 | A.12 |
 | `regime.er.n` | 10 | A.4.1 |
 | `regime.er.trend` | 0.5 | A.4.1 |
 | `regime.er.range` | 0.3 | A.4.1 |
@@ -1387,11 +1612,17 @@ TF별로 최근 `R_tf`개 마감 봉 안에서 발생한 이벤트만 보고한�
 | `regime.shock.gap_bars` | 2 | A.4.4 |
 | `regime.shock.duration_bars` | 4 | A.4.4 |
 | `derivatives.quadrant.periods` | ["1h", "4h"] | A.5.1 |
-| `derivatives.quadrant.oi_band` | 0.001 | A.5.1 |
-| `derivatives.quadrant.px_band` | 0.001 | A.5.1 |
+| `derivatives.quadrant.band_lookback` | 2016 | A.5.1 |
+| `derivatives.quadrant.band_pct` | 30 | A.5.1 |
+| `derivatives.quadrant.confirm_snapshots` | 3 | A.5.1 |
+| `derivatives.quadrant.min_coverage` | 0.9 | A.5.1 |
 | `derivatives.premium.windows` | ["15m", "1h", "4h"] | A.5.2 |
 | `derivatives.premium.smoothing_tf` | "15m" | A.5.2 |
 | `derivatives.premium.pct_lookback` | 672 | A.5.2 |
+| `derivatives.premium.current_pct_lookback` | 10080 | A.5.2 |
+| `derivatives.premium.min_coverage` | 0.9 | A.5.2 |
+| `derivatives.ratios.pct_lookback` | 2016 | A.5.4 |
+| `derivatives.ratios.min_coverage` | 0.9 | A.5.4 |
 | `levels.vwap_window_minutes` | 1440 | A.6 |
 | `levels.range_window_minutes` | 1440 | A.7.1 |
 | `levels.swing_timeframes` | ["15m", "1h"] | A.7.1 |
@@ -1400,6 +1631,7 @@ TF별로 최근 `R_tf`개 마감 봉 안에서 발생한 이벤트만 보고한�
 | `levels.merge_dist` | 0.5 | A.7.3 |
 | `levels.zone_width` | 0.25 | A.7.4 |
 | `levels.report_each_side` | 5 | A.7.4 |
+| `levels.touch_tf` | "15m" | A.7.5 |
 | `events.report_bars` | {15m: 16, 30m: 8, 1h: 8, 1d: 3} | A.8.2 |
 | `events.quadrant_change.report_minutes` | 240 | A.8.2 |
 | `events.level.timeframes` | ["15m"] | A.8.3 |
@@ -1418,10 +1650,34 @@ TF별로 최근 `R_tf`개 마감 봉 안에서 발생한 이벤트만 보고한�
 | `report.digits_ratio` | 3 | FR-4.1 |
 | `report.digits_bp` | 2 | FR-4.1 |
 | `report.digits_pct` | 1 | FR-4.1 |
+| `report.digits_volume` | 3 | FR-4.1 |
+| `stats.min_n` | 30 | 부록 B |
+| `reference.timeframes` | ["15m", "1h"] | A.13 |
+| `reference.ma.periods` / `kind` / `equal_tol_atr` | [5, 20, 60] / "sma" / 0.1 | A.13.1 |
+| `reference.rsi.n` / `equal_tol` | 14 / 1.0 | A.13.2, A.13.5 |
+| `reference.bb.n` / `k` / `width_lookback` | 20 / 2.0 / 100 | A.13.3 |
+| `reference.macd.fast` / `slow` / `signal` | 12 / 26 / 9 | A.13.4 |
+| `sessions.asia` / `europe` / `us` | Asia/Tokyo 09:00–18:00 / Europe/London 08:00–16:30 / America/New_York 09:30–16:00 | FR-4.9 |
+| `stats.s1.horizon_bars` | [4, 8] | 부록 B (변경 시 정의 버전 변경) |
+| `plans.default_ttl_hours` | 24 | FR-7.1 |
+| `plans.report_hours` | 48 | FR-7.6 |
+| `historical.publication_lag_minutes` | {taker_buy_sell_ratio: 10, 나머지 metrics 컬럼: 5} | FR-4.8 |
 
 ---
 
 ### A.11 본문 반영 내역
+
+PRD v1.13 (부록 A v1.4):
+- **A.13**: 참조 지표 계열 `reference` 신설(MA 배열 허용 오차 포함). **FR-3.13** 계열 목록 수정. **FR-4.9** 세션 표시.
+
+PRD v1.10 (부록 A v1.3, CR-2 첫 묶음):
+- **A.3.3**: 스윙 비교 허용 오차와 `high_relation`·`low_relation`. **A.3.4**: `last_break`. **A.3.5**: 진행 파동 기준 되돌림, `basis`.
+- **A.3.1, A.4.1**: `close_vs_open`, `er_direction`.
+- **A.5.1**: 4분면 3×3, 분포 기준 불감대, 지속 조건 확정 상태. `indeterminate` 삭제. **A.8.3** `quadrant_change`는 확정 상태 변화로.
+- **A.5.2, A.5.4**: 프리미엄 현재값 1분 백분위, 비율 지표 백분위(채움률 하한).
+- **A.7.4, A.7.5**: `level_id`, bp 거리, 터치 횟수. 레벨 이벤트에 `level_id`.
+- **A.12**: 체결 흐름 계열 `flow` 신설. **FR-3.13** 계열 목록 수정.
+- **FR-4.1, FR-4.8**: 요약 스키마 v2(출력 정리, 필드별 공개 지연 표시). 저장소 스키마 버전 4(`summary_log.params`).
 
 PRD v1.9 (부록 A v1.2):
 - **A.8.3**: `quadrant_change`를 확정 4분면 사이의 변화로 한정. `indeterminate`·`null`을 건너뛴다.
@@ -1448,3 +1704,58 @@ PRD v1.2 (부록 A v0.2):
 - **FR-3.12**: 이벤트 목록을 A.8.3으로 참조.
 - **FR-4.1**: `regime`, `derivatives` 섹션 내용을 두 축과 프리미엄 정의에 맞춰 수정.
 - **CLAUDE.md**: 용어집(레짐, 충격 상태, BOS, MSS, 구조 상태, 결손 표시)과 R-2 금지어(`support`, `resistance`) 수정.
+
+---
+
+## 부록 B. 과거 발생 빈도 통계 (v1.0)
+
+**원칙** (CLAUDE.md R-1 예외)
+- 통계는 예측이 아니라 과거 발생 빈도의 기술이다. 관측 빈도는 과거 표본의 기술이며 다음 사건의 발생 가능성을 뜻하지 않는다.
+- 결과 정의(판정 기간, 실패 조건, 제외 규칙)는 결과를 보기 전에 이 부록에 확정한다. 정의를 바꾸려면 `definition_version`을 올리고 B.9 변경 이력에 사유를 기록한다. 결과를 본 뒤 판정 기간을 추가·변경하는 것도 정의 변경이다.
+- 모든 버킷 값은 `n`과 원 건수를 동반한다. `n < min_n`이면 비율과 중앙값을 싣지 않는다.
+- 엔진이 시작점(A.1.8)부터 한 번 순회한 결과를 쓴다. 각 봉 시점의 상태는 그 시점까지의 데이터로만 정해지므로 봉마다 다시 계산하지 않는다. 판정 기간이 기준 시각을 넘는 표본은 제외하므로 기준 시각 이후 데이터가 통계에 영향을 주지 않는다.
+
+### B.1 S-1 돌파 유지율 (`definition_version = "S1.v1"`)
+
+**B.1.1 표본**
+- 시작점부터 기준 시각까지의 15m `structure_break` 이벤트 전체(A.3.4, `break_kind` 무관). 표본 TF(15m)와 맥락 TF(1h)는 이 정의의 일부이며 설정값이 아니다.
+
+**B.1.2 판정 기간**
+- 돌파 봉 t 다음 `N`봉(t+1 … t+N). `N ∈ horizon_bars = [4, 8]`(1시간, 2시간). 두 기간은 항상 함께 계산·출력하며 하나만 골라 싣지 않는다.
+
+**B.1.3 결과**
+- **실패(`failed`)**: 판정 기간 안의 15m 종가가 돌파된 스윙 가격 X로 되돌아온 경우. 위쪽 돌파(`above_swing_high`)는 `C ≤ X`, 아래쪽 돌파(`below_swing_low`)는 `C ≥ X`. 돌파 조건의 반대다.
+- **유지(`held`)**: 판정 기간 N봉 동안 한 번도 되돌아오지 않은 경우.
+- **순행·역행**: 실패 여부와 무관하게 판정 기간 N봉 전체의 고가·저가로 잰다. 기준가는 돌파 봉 종가 `C_t`. 위쪽 돌파의 순행 = `max(High) − C_t`, 역행 = `C_t − min(Low)`(아래쪽 돌파는 대칭, 0 미만이면 0). bp(`/ C_t × 10000`)와 ATR 배수(`/ ATR_{t−1}`, A.1.7, 같은 TF) 둘 다 싣는다. `ATR_{t−1}`이 없으면 그 표본은 ATR 배수 중앙값에서만 빠진다.
+
+**B.1.4 제외**
+- 중복(`excluded_overlap`): 시간순으로 보며, 남긴 표본의 긴 판정 기간(8봉) 안에 다시 나온 같은 방향 돌파는 제외한다. 반대 방향 돌파는 남긴다. 제외한 표본은 이후 중복 판정의 기준이 되지 않는다.
+- 결측(`excluded_gap`): 긴 판정 기간(8봉) 안에 부재 봉이 있으면 제외한다.
+- 미확정(`pending_outcome`): 긴 판정 기간이 기준 시각을 넘으면 제외한다.
+- 판정 순서는 중복 → 미확정 → 결측이다. 세 기간 모두 같은 표본 집합을 쓴다.
+
+**B.1.5 분류 축** (한 번에 하나씩. 교차 버킷은 `n`을 확인한 뒤 결정한다)
+- `all`: 전체.
+- `h1_efficiency_state`: 돌파 시점의 1h `efficiency_state`(shock 포함). 기준 봉은 `close_time ≤ 돌파 봉 close_time`인 마지막 1h 봉이다. 15m 돌파 봉과 1h 봉이 같은 시각에 마감하면 그 1h 봉을 쓴다(같은 시각 마감은 미래 참조가 아니다). 상태가 없으면 `unavailable`.
+- `m15_volatility_state`: 돌파 봉의 15m `volatility_state`. 없으면 `unavailable`.
+- `break_kind`: `BOS`, `MSS`, `break_no_displacement`, `break_unclassified`.
+
+**B.1.6 버킷 값**
+- `n`, `held`, `failed`, `held_ratio`(= held / n), `mfe_bp_median`, `mae_bp_median`, `mfe_atr_median`, `mae_atr_median`.
+- `n < min_n`이면 `held_ratio`와 중앙값 네 개는 `null`, `null_reason = insufficient_sample`. 건수는 싣는다.
+
+**B.1.7 요약 출력 (`statistics.s1`)**
+- `definition_version`, `horizon_bars`, `min_n`, `period_start`(표본 TF 첫 봉), `period_end`(판정 기간이 끝난 마지막 돌파 봉 시각의 상한), `samples`(남긴 표본 수), `excluded_overlap`, `excluded_gap`, `pending_outcome`.
+- 판정 기간마다 버킷: `all`, 현재 1h `efficiency_state`의 `h1_efficiency_state` 버킷, 현재 15m `volatility_state`의 `m15_volatility_state` 버킷, `break_kind` 네 버킷 모두. `break_kind`는 현재 상태가 없는 속성이므로 모두 싣는다.
+- 15m 또는 1h가 계산 대상 TF가 아니면 `statistics.s1`은 `null`, 사유 `required_timeframe_missing`.
+
+**B.1.8 설정**
+- `stats.min_n = 30`, `stats.s1.horizon_bars = [4, 8]`. 검증 상태 `미검증`. `horizon_bars`를 바꾸는 것은 정의 변경이다(B.9).
+- 고정 강제: 설정 로드 시 `stats.s1.horizon_bars`가 현재 정의 버전에 등록된 값과 다르면 실행을 거부하고 정의 버전을 올려야 한다는 오류를 낸다. 코드의 정의 등록부(`S1_DEFINITIONS`)는 B.9 변경 이력과 같은 내용을 가진다.
+
+### B.9 변경 이력
+
+| 정의 버전 | 날짜 | 내용 | 사유 |
+|---|---|---|---|
+| S1.v1 | 2026-09-26 | 최초 확정. 판정 기간 [4, 8], 실패 `C ≤ X`(대칭), 긴 기간 기준 중복·결측 제외 | CR-2.2. 결과를 보기 전에 확정 |
+

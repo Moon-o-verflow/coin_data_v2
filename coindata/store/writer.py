@@ -147,10 +147,10 @@ def insert_summary(conn: sqlite3.Connection, record: SummaryRecord) -> None:
     """요약 기록 (FR-4.5). 같은 요약 ID가 있으면 기본키 충돌로 실패한다."""
     with transaction(conn):
         conn.execute(
-            'INSERT INTO summary_log (summary_id, created_at, "trigger", ref_time, ref_price, params_hash, state, file_path) '
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            'INSERT INTO summary_log (summary_id, created_at, "trigger", ref_time, ref_price, params_hash, state, file_path, '
+            "params) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 record.summary_id, record.created_at, record.trigger.value, record.ref_time, record.ref_price,
-                record.params_hash, record.state, record.file_path,
+                record.params_hash, record.state, record.file_path, record.params,
             ),
         )

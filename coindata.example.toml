@@ -41,6 +41,11 @@ k = 2.0
 [indicators.structure]
 displacement_mult = 1.5
 displacement_lookback = 20
+equal_tol_atr = 0.1               # 스윙 차가 이 × ATR 미만이면 같음 (A.3.3)
+
+[indicators.flow]
+ema_n = 15                        # 체결 델타 EMA 기간 (A.12)
+pct_lookback = 100
 
 [regime.er]
 n = 10
@@ -60,13 +65,21 @@ duration_bars = 4
 
 [derivatives.quadrant]
 periods = ["1h", "4h"]
-oi_band = 0.001
-px_band = 0.001
+band_lookback = 2016              # 불감대 분포 표본 수(5분 스냅샷, 7일) (A.5.1)
+band_pct = 30.0
+confirm_snapshots = 3             # 확정 상태로 인정하는 연속 스냅샷 수
+min_coverage = 0.9
 
 [derivatives.premium]
 windows = ["15m", "1h", "4h"]
 smoothing_tf = "15m"
 pct_lookback = 672
+current_pct_lookback = 10080      # 현재 1분 값 백분위 표본(7일) (A.5.2)
+min_coverage = 0.9
+
+[derivatives.ratios]
+pct_lookback = 2016               # 비율 지표 백분위 표본(5분, 7일) (A.5.4)
+min_coverage = 0.9
 
 [levels]
 swing_timeframes = ["15m", "1h"]
@@ -77,6 +90,7 @@ swing_count = 5
 merge_dist = 0.5
 zone_width = 0.25
 report_each_side = 5
+touch_tf = "15m"                  # 터치 횟수를 세는 TF (A.7.5)
 
 [events]
 report_bars = { "15m" = 16, "30m" = 8, "1h" = 8, "1d" = 3 }
@@ -108,3 +122,46 @@ digits_price = 2
 digits_ratio = 3
 digits_bp = 2
 digits_pct = 1
+digits_volume = 3
+
+[historical]
+# 과거 시점 요약에서 공개 지연 가능성을 표시할 필드별 지연(분) (FR-4.8)
+publication_lag_minutes = { sum_open_interest = 5, sum_open_interest_value = 5, top_position_ratio = 5, top_account_ratio = 5, global_account_ratio = 5, taker_buy_sell_ratio = 10 }
+
+[plans]
+default_ttl_hours = 24            # 계획 만료 기본값: 등록 기준 요약 시각 + 이 시간 (FR-7.1)
+report_hours = 48                 # 요약에 싣는 최근 종료 계획의 범위 (FR-7.6)
+
+[stats]
+min_n = 30                         # 버킷 표본이 이보다 적으면 비율을 싣지 않는다 (부록 B)
+
+[stats.s1]
+horizon_bars = [4, 8]             # 돌파 유지 판정 기간(15m 봉). 바꾸면 정의 버전 변경 (부록 B.1.2)
+
+[reference]
+timeframes = ["15m", "1h"]        # 참조 지표 대상 TF. 근거로 세지 않는다 (A.13)
+
+[reference.ma]
+periods = [5, 20, 60]
+kind = "sma"                      # sma / ema
+equal_tol_atr = 0.1               # 인접 MA 차가 이 × ATR 미만이면 같음 (A.13.1)
+
+[reference.rsi]
+n = 14
+equal_tol = 1.0                   # 다이버전스 RSI 비교 허용 오차 (A.13.5)
+
+[reference.bb]
+n = 20
+k = 2.0
+width_lookback = 100
+
+[reference.macd]
+fast = 12
+slow = 26
+signal = 9
+
+[sessions]
+# 현지 시각과 IANA 시간대. 서머타임이 자동 반영된다 (FR-4.9)
+asia = { timezone = "Asia/Tokyo", start = "09:00", end = "18:00" }
+europe = { timezone = "Europe/London", start = "08:00", end = "16:30" }
+us = { timezone = "America/New_York", start = "09:30", end = "16:00" }

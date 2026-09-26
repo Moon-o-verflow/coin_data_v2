@@ -7,7 +7,10 @@ name = "coindata"
 version = "3.0.0.dev0"
 description = "바이낸스 USD-M ETHUSDT 판단 재료 생성기"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    # 세션 표시(FR-4.9)의 IANA 시간대 데이터. Windows에는 시스템 시간대 데이터가 없다(C-2 승인)
+    "tzdata; sys_platform == \"win32\"",
+]
 
 [project.scripts]
 coindata = "coindata.cli:main"

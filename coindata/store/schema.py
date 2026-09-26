@@ -10,7 +10,7 @@ import sqlite3
 from coindata.models import ArchiveFileStatus, Dataset, GapReason, RunMode, RunStatus, SummaryTrigger
 from coindata.store.db import StoreError, transaction
 
-SCHEMA_VERSION = 3  # 2: summary_log.trigger에 historical 추가, 3: data_gap.reason에 awaiting_archive 추가
+SCHEMA_VERSION = 5  # 5: plan, plan_state_log. 2: summary_log.trigger에 historical 추가, 3: data_gap.reason에 awaiting_archive 추가, 4: summary_log.params
 
 
 def _values(enum_type: type) -> str:
@@ -115,8 +115,36 @@ _DDL: tuple[str, ...] = (
         ref_price REAL NOT NULL,
         params_hash TEXT NOT NULL,
         state TEXT NOT NULL,
-        file_path TEXT NOT NULL
+        file_path TEXT NOT NULL,
+        params TEXT
     )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS plan (
+        plan_key TEXT PRIMARY KEY,
+        source_summary_id TEXT NOT NULL,
+        spec TEXT NOT NULL,
+        registered_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        cancelled_at INTEGER,
+        at_registration TEXT NOT NULL,
+        activation_context TEXT,
+        state TEXT,
+        evaluation TEXT,
+        evaluated_at INTEGER
+    ) WITHOUT ROWID
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS plan_state_log (
+        plan_key TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        state TEXT NOT NULL,
+        time INTEGER NOT NULL,
+        price REAL,
+        gap_before INTEGER NOT NULL,
+        evaluated_at INTEGER NOT NULL,
+        PRIMARY KEY (plan_key, seq)
+    ) WITHOUT ROWID
     """,
 )
 
@@ -135,10 +163,17 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         for ddl in _DDL:
             conn.execute(ddl)
         for table in rebuild:
-            conn.execute(f"INSERT INTO {table} SELECT * FROM {table}_old")
+            columns = ", ".join(f'"{row[1]}"' for row in conn.execute(f"PRAGMA table_info({table}_old)"))
+            conn.execute(f"INSERT INTO {table} ({columns}) SELECT {columns} FROM {table}_old")
             conn.execute(f"DROP TABLE {table}_old")
+        for since, table, column in _ADDED_AT:
+            existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+            if 0 < version < since and column.split()[0] not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column}")
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
 # (이 버전부터 제약이 바뀐 테이블). 그보다 낮은 버전의 저장소는 이 테이블을 다시 만든다.
 _REBUILT_AT: tuple[tuple[int, str], ...] = ((2, "summary_log"), (3, "data_gap"))
+# (이 버전에 추가된 컬럼). 테이블을 다시 만들지 않은 낮은 버전 저장소에 컬럼만 더한다.
+_ADDED_AT: tuple[tuple[int, str, str], ...] = ((4, "summary_log", "params TEXT"),)

@@ -35,6 +35,7 @@ class Bar:
     close: float
     volume: float
     quote_volume: float
+    taker_buy_volume: float  # 1분봉 taker 매수 체결량의 합 (A.12)
     high_time: int  # high를 처음 기록한 1분봉의 open_time (A.1.1)
     low_time: int
     missing_minutes: int
@@ -69,12 +70,13 @@ class BarSeries:
 
 
 class _Acc:
-    __slots__ = ("open_time", "open", "high", "low", "close", "volume", "quote", "high_time", "low_time", "count")
+    __slots__ = ("open_time", "open", "high", "low", "close", "volume", "quote", "taker_buy", "high_time", "low_time", "count")
 
     def __init__(self, k: Kline) -> None:
         self.open_time = k.open_time
         self.open, self.high, self.low, self.close = k.open, k.high, k.low, k.close
         self.volume, self.quote = k.volume, k.quote_volume
+        self.taker_buy = k.taker_buy_volume
         self.high_time = self.low_time = k.open_time
         self.count = 1
 
@@ -86,12 +88,13 @@ class _Acc:
         self.close = k.close
         self.volume += k.volume
         self.quote += k.quote_volume
+        self.taker_buy += k.taker_buy_volume
         self.count += 1
 
     def bar(self, open_time: int, tf_ms: int) -> Bar:
         minutes = tf_ms // MINUTE_MS
         return Bar(
-            open_time, tf_ms, self.open, self.high, self.low, self.close, self.volume, self.quote,
+            open_time, tf_ms, self.open, self.high, self.low, self.close, self.volume, self.quote, self.taker_buy,
             self.high_time, self.low_time, minutes - self.count,
         )
 

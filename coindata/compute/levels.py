@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+import hashlib
 from dataclasses import dataclass
 
+from coindata.compute.series import BarSeries
 from coindata.compute.zigzag import HIGH, LOW, Swing
 from coindata.models import MINUTE_MS, Kline
 
+BP = 10_000
+NO_SWING_MEMBER = "no_swing_member"
 VWAP = "vwap_24h"
 HIGH_24H = "high_24h"
 LOW_24H = "low_24h"
@@ -97,6 +101,18 @@ class Level:
     sources: tuple[str, ...]
     source_count: int
     members: tuple[LevelMember, ...]
+    level_id: str  # 한 요약 안에서만 유효하다 (A.7.4)
+
+
+def level_id(members: Sequence[LevelMember]) -> str:
+    """A.7.4: 정렬한 (source, price)의 SHA-1 앞 8자리. 가격은 소수 8자리로 표기한다."""
+    key = "|".join(sorted(f"{m.source}:{m.price:.8f}" for m in members))
+    return "lv_" + hashlib.sha1(key.encode("utf-8")).hexdigest()[:8]
+
+
+def distance_bp(price: float, ref_price: float) -> float:
+    """FR-4.1: `(가격 − ref_price) / ref_price × 10000`, 부호 유지."""
+    return (price - ref_price) / ref_price * BP
 
 
 def build_level(members: Sequence[LevelMember], zone_width: float, atr: float, ref_price: float) -> Level:
@@ -111,7 +127,9 @@ def build_level(members: Sequence[LevelMember], zone_width: float, atr: float, r
     else:
         position = "inside"
     sources = tuple(sorted({m.source for m in members}))
-    return Level(center, low, high, (center - ref_price) / atr, position, sources, len(sources), tuple(members))
+    return Level(
+        center, low, high, (center - ref_price) / atr, position, sources, len(sources), tuple(members), level_id(members)
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,3 +166,45 @@ def members_known_at(
             if not own_extreme:
                 kept.append(m)
     return tuple(kept)
+
+
+@dataclass(frozen=True, slots=True)
+class TouchStats:
+    touch_count: int | None
+    last_touch_bars_ago: int | None
+    absent_bars: int | None
+    null_reason: str | None
+
+
+def touch_stats(level: Level, series: BarSeries, zone_width: float, atr: float) -> TouchStats:
+    """A.7.5 터치 횟수. 봉마다 그 봉 시작 시점에 알려진 스윙 구성원으로 zone을 다시 만든다.
+
+    zone과 [저가, 고가]가 겹치는 봉이 이어진 구간 하나가 터치 1회다. 부재 봉은 연속을 끊고 따로 센다.
+    """
+    swing_members = [m for m in level.members if m.swing is not None]
+    if not swing_members:
+        return TouchStats(None, None, None, NO_SWING_MEMBER)
+    earliest = min(m.swing.known_time for m in swing_members)  # type: ignore[union-attr]
+    start = max(0, -(-(earliest - series.start) // series.tf_ms))
+    last = len(series.bars) - 1
+    count = absent = 0
+    last_touch: int | None = None
+    in_run = False
+    for i in range(start, last + 1):
+        bar = series.bars[i]
+        if bar is None:
+            absent += 1
+            in_run = False
+            continue
+        known = [m.price for m in swing_members if m.swing.known_time <= bar.open_time]  # type: ignore[union-attr]
+        if not known:
+            in_run = False
+            continue
+        low, high = min(known) - zone_width * atr, max(known) + zone_width * atr
+        inside = bar.low <= high and bar.high >= low
+        if inside:
+            if not in_run:
+                count += 1
+            last_touch = i
+        in_run = inside
+    return TouchStats(count, last - last_touch if last_touch is not None else None, absent, None)

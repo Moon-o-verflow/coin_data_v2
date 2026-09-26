@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import math
 import unittest
-from unittest import mock
 
 from coindata.compute import derivatives as deriv
-from coindata.compute import engine
 from coindata.compute import events as ev
+from coindata.compute import flow as flow_mod
 from coindata.compute.engine import ComputeInput, analyze
 from coindata.compute.indicators import atr, candle, efficiency_ratio, parkinson, percentile_rank, rolling_percentile
 from coindata.compute.levels import (
@@ -16,9 +15,11 @@ from coindata.compute.levels import (
     VWAP,
     LevelMember,
     build_level,
+    distance_bp,
     levels,
     members_known_at,
     merge,
+    touch_stats,
     window_stats,
 )
 from coindata.compute.regime import duration, efficiency_state, shock, volatility_state
@@ -42,19 +43,24 @@ from coindata.compute.structure import (
     Break,
     analyze_structure,
     retracement,
+    retracement_tentative,
     structure_state,
 )
-from coindata.compute.zigzag import HIGH, LOW, Swing, zigzag
+from coindata.compute.zigzag import HIGH, LOW, Swing, Tentative, zigzag
 from coindata.config import Config, RegimeConfig
 from coindata.models import MINUTE_MS, Kline, LatestMetric, MetricsRow, PremiumKline
 
 TF = 15 * MINUTE_MS
 
 
-def bar(i: int, o: float, h: float, lo: float, c: float, high_min: int = 1, low_min: int = 0, volume: float = 1.0) -> Bar:
+def bar(
+    i: int, o: float, h: float, lo: float, c: float, high_min: int = 1, low_min: int = 0, volume: float = 1.0,
+    taker_buy: float | None = None,
+) -> Bar:
     """15m 봉 i. 고가·저가가 나온 1분봉을 봉 안의 분 오프셋으로 준다."""
     t = i * TF
-    return Bar(t, TF, o, h, lo, c, volume, volume * c, t + high_min * MINUTE_MS, t + low_min * MINUTE_MS, 0)
+    buy = volume / 2 if taker_buy is None else taker_buy
+    return Bar(t, TF, o, h, lo, c, volume, volume * c, buy, t + high_min * MINUTE_MS, t + low_min * MINUTE_MS, 0)
 
 
 def series_of(bars: list[Bar | None]) -> BarSeries:
@@ -218,14 +224,41 @@ def swing(kind: str, price: float, index: int, confirmed: int) -> Swing:
 
 
 class StructureTest(unittest.TestCase):
+    ATR = [1.0] * 10
+
     def test_state(self) -> None:
-        self.assertEqual(structure_state([swing(LOW, 1, 0, 0), swing(HIGH, 5, 1, 1)]), INSUFFICIENT)
-        hl = [swing(LOW, 1, 0, 0), swing(HIGH, 5, 1, 1), swing(LOW, 2, 2, 2), swing(HIGH, 6, 3, 3)]
-        self.assertEqual(structure_state(hl), HHHL)
-        lh = [swing(HIGH, 6, 0, 0), swing(LOW, 2, 1, 1), swing(HIGH, 5, 2, 2), swing(LOW, 1, 3, 3)]
-        self.assertEqual(structure_state(lh), LHLL)
-        eq = [swing(LOW, 1, 0, 0), swing(HIGH, 5, 1, 1), swing(LOW, 1, 2, 2), swing(HIGH, 6, 3, 3)]
-        self.assertEqual(structure_state(eq), MIXED)
+        def state(swings):
+            return structure_state(swings, self.ATR, 0.1).state
+
+        self.assertEqual(state([swing(LOW, 1, 0, 1), swing(HIGH, 5, 1, 2)]), INSUFFICIENT)
+        hl = [swing(LOW, 1, 0, 1), swing(HIGH, 5, 1, 2), swing(LOW, 2, 2, 3), swing(HIGH, 6, 3, 4)]
+        self.assertEqual(state(hl), HHHL)
+        lh = [swing(HIGH, 6, 0, 1), swing(LOW, 2, 1, 2), swing(HIGH, 5, 2, 3), swing(LOW, 1, 3, 4)]
+        self.assertEqual(state(lh), LHLL)
+        eq = [swing(LOW, 1, 0, 1), swing(HIGH, 5, 1, 2), swing(LOW, 1, 2, 3), swing(HIGH, 6, 3, 4)]
+        self.assertEqual(state(eq), MIXED)
+
+    def test_equal_tolerance(self) -> None:
+        # A.3.3: 저점 차 0.05 < 0.1 × ATR(1.0) → 같음 → mixed (5/29 1h 사례와 같은 형태)
+        near = [swing(LOW, 1.0, 0, 1), swing(HIGH, 5, 1, 2), swing(LOW, 1.05, 2, 3), swing(HIGH, 6, 3, 4)]
+        s = structure_state(near, self.ATR, 0.1)
+        self.assertEqual((s.state, s.high_relation, s.low_relation), (MIXED, "higher", "equal"))
+        self.assertEqual(structure_state(near, self.ATR, 0.0).state, HHHL)
+        # 나중 저점의 확정 봉(3) 직전 봉 ATR로 판정한다
+        atr = [1.0, 1.0, 0.2, 1.0, 1.0]
+        self.assertEqual(structure_state(near, atr, 0.1).low_relation, "higher")
+        no_atr = [1.0, 1.0, None, 1.0, 1.0]
+        self.assertEqual(structure_state(near, no_atr, 0.1).state, INSUFFICIENT)
+
+    def test_retracement_tentative(self) -> None:
+        swings = [swing(LOW, 100, 2, 3)]
+        up = Tentative("up", 110, 5)
+        self.assertAlmostEqual(retracement_tentative(swings, up, 106), 0.4)
+        self.assertAlmostEqual(retracement_tentative(swings, up, 95), 1.5)
+        down = Tentative("down", 90, 5)
+        self.assertAlmostEqual(retracement_tentative([swing(HIGH, 100, 2, 3)], down, 92), 0.2)
+        self.assertIsNone(retracement_tentative([], up, 100))
+        self.assertIsNone(retracement_tentative(swings, None, 100))
 
     def _closes(self, closes: list[float], bodies: float = 1.0) -> BarSeries:
         return series_of([bar(i, c - bodies, c + 1, c - bodies - 1, c) for i, c in enumerate(closes)])
@@ -234,7 +267,7 @@ class StructureTest(unittest.TestCase):
         swings = [swing(LOW, 1, 0, 1), swing(HIGH, 5, 1, 2), swing(LOW, 2, 2, 3), swing(HIGH, 6, 3, 4)]
         # 봉 6에서 6 초과(봉 5는 6과 같음 → 돌파 아님). 봉 8에서 더 오래된 고점 5를 다시 넘지만 대상이 아니다(A.3.4).
         s = self._closes([3, 3, 3, 3, 4, 6, 7, 5, 7])
-        r = analyze_structure(s, swings, [1.0] * 9, 1.5, 2)
+        r = analyze_structure(s, swings, [1.0] * 9, 1.5, 2, 0.1)
         self.assertEqual([(b.bar_index, b.side, b.break_kind) for b in r.breaks], [(6, ABOVE, "BOS")])
         self.assertEqual(r.broken, frozenset({3}))
         self.assertAlmostEqual(r.breaks[0].close_beyond_atr, 1.0)
@@ -244,7 +277,7 @@ class StructureTest(unittest.TestCase):
     def test_new_swing_replaces_target(self) -> None:
         swings = [swing(LOW, 1, 0, 1), swing(HIGH, 5, 1, 2), swing(HIGH, 4, 3, 5)]
         s = self._closes([3, 3, 3, 6, 3, 3, 4.5, 5.5])
-        r = analyze_structure(s, swings, [1.0] * 8, 1.5, 2)
+        r = analyze_structure(s, swings, [1.0] * 8, 1.5, 2, 0.1)
         # 봉 3에서 고점 5 돌파 → 대상 없음. 봉 5에 확정된 고점 4가 새 대상 → 봉 6에서 돌파. 봉 7은 대상 없음.
         self.assertEqual([(b.bar_index, b.swing.price) for b in r.breaks], [(3, 5), (6, 4)])
         self.assertEqual(r.broken, frozenset({1, 2}))
@@ -253,10 +286,10 @@ class StructureTest(unittest.TestCase):
         swings = [swing(LOW, 1, 0, 1), swing(HIGH, 5, 1, 2), swing(LOW, 2, 2, 3), swing(HIGH, 6, 3, 4)]
         closes = [3, 3, 3, 3, 3, 3, 1.5]
         small = series_of([bar(i, c + 0.5, c + 1, c - 1, c) for i, c in enumerate(closes)])
-        r = analyze_structure(small, swings, [1.0] * 7, 1.5, 2)
+        r = analyze_structure(small, swings, [1.0] * 7, 1.5, 2, 0.1)
         self.assertEqual([(b.side, b.break_kind) for b in r.breaks], [(BELOW, "break_no_displacement")])
         big_bars = [bar(i, c + 0.5, c + 1, c - 1, c) for i, c in enumerate(closes[:-1])] + [bar(6, 3, 3, 1, 1.5)]
-        r = analyze_structure(series_of(big_bars), swings, [1.0] * 7, 1.5, 2)
+        r = analyze_structure(series_of(big_bars), swings, [1.0] * 7, 1.5, 2, 0.1)
         self.assertEqual(r.breaks[0].break_kind, "MSS")
         self.assertAlmostEqual(r.breaks[0].displacement_mult, 3.0)
 
@@ -310,21 +343,58 @@ class StateChangeEventTest(unittest.TestCase):
 class DerivativesTest(unittest.TestCase):
     H = 60 * MINUTE_MS
 
-    def test_quadrant(self) -> None:
+    def test_changes_at(self) -> None:
         ts = 10 * self.H
         oi = {ts: 1010.0, ts - self.H: 1000.0}
         px = {ts - MINUTE_MS: 99.0, ts - self.H - MINUTE_MS: 100.0}
-        q = deriv.quadrant_at(ts, "1h", self.H, oi, px, 0.001, 0.001)
-        self.assertEqual(q.quadrant, "oi_up_price_down")
-        self.assertAlmostEqual(q.d_oi, 0.01)
-        q = deriv.quadrant_at(ts, "1h", self.H, oi, px, 0.02, 0.001)
-        self.assertEqual(q.quadrant, "indeterminate")
-        q = deriv.quadrant_at(ts, "4h", 4 * self.H, oi, px, 0.001, 0.001)
-        self.assertEqual((q.quadrant, q.null_reason), (None, "source_gap"))
+        d_oi, d_px = deriv.changes_at(ts, self.H, oi, px)
+        self.assertAlmostEqual(d_oi, 0.01)
+        self.assertAlmostEqual(d_px, -0.01)
+        self.assertEqual(deriv.changes_at(ts, 4 * self.H, oi, px), (None, None))
+
+    def test_band_value(self) -> None:
+        self.assertEqual(deriv.band_value([1, 2, 3, 4, 5], 30), 2)  # floor(0.3 × 4) = 1
+        self.assertEqual(deriv.band_value([7], 30), 7)
+
+    def test_quadrant_series_band_and_coverage(self) -> None:
+        step = 5 * MINUTE_MS
+        t = [100 * step + i * step for i in range(6)]
+        oi = dict(zip(t, [100.0, 101.0, 101.0, 103.02, 103.02, 100.9596]))
+        px = {ts - MINUTE_MS: 50.0 for ts in t} | {t[0] - step - MINUTE_MS: 50.0}
+        points = deriv.quadrant_series(step, oi, px, t[4], t[5], step, 4, 50, 0.9)
+        # t4 표본 |dOI| = [0.01, 0, 0.02, 0] → 정렬 [0, 0, 0.01, 0.02], floor(0.5 × 3) = 1 → band 0
+        self.assertEqual([p.raw for p in points], ["oi_flat_price_flat", "oi_down_price_flat"])
+        self.assertEqual(points[1].band_oi, 0.0)
+        early = deriv.quadrant_series(step, oi, px, t[1], t[1], step, 4, 50, 0.9)
+        self.assertEqual((early[0].raw, early[0].null_reason), (None, "insufficient_coverage"))
+
+    def test_confirm_needs_consecutive_snapshots(self) -> None:
+        step = 5 * MINUTE_MS
+        raws = ["A", "A", "A", "B", "B", None, "B", "B", "B", "C", "C"]
+        points = [deriv.QuadrantPoint(i * step, 0.0, 0.0, 0.0, 0.0, r, None) for i, r in enumerate(raws)]
+        state = deriv.confirm("1h", points, 3)
+        self.assertEqual(state.confirmed, "B")
+        self.assertEqual(state.confirmed_since, 8 * step)
+        self.assertEqual(state.duration_snapshots, 2)
+        self.assertFalse(state.duration_capped)
+        self.assertEqual([(ts, a, b) for ts, a, b, _ in state.changes], [(8 * step, "A", "B")])
+        self.assertEqual(state.point.raw, "C")
+        first = deriv.confirm("1h", points[:4], 3)
+        self.assertEqual((first.confirmed, first.duration_capped), ("A", True))
+
+    def test_ratio_values(self) -> None:
+        step = 5 * MINUTE_MS
+        rows = [MetricsRow("ETHUSDT", i * step, top_position_ratio=float(i)) for i in range(1, 11) if i != 4]
+        latest = [LatestMetric("top_position_ratio", 10.0, 10 * step)]
+        values = {v.field: v for v in deriv.ratio_values(rows, latest, step, 10, 0.9)}
+        top = values["top_position_ratio"]
+        self.assertEqual((top.sample_n, top.pct), (9, 100 * (8 + 0.5) / 9))
+        self.assertIsNone(deriv.ratio_values(rows, latest, step, 10, 0.95)[0].pct)
+        self.assertEqual(values["taker_buy_sell_ratio"].null_reason, "source_gap")
 
     def test_premium(self) -> None:
         rows = [PremiumKline("ETHUSDT", m * MINUTE_MS, 0, 0, 0, -m / 10_000, 12) for m in range(60) if m != 50]
-        r = deriv.premium(rows, 60 * MINUTE_MS, [("15m", 15 * MINUTE_MS), ("1h", self.H)], 15 * MINUTE_MS, 2, 0)
+        r = deriv.premium(rows, 60 * MINUTE_MS, [("15m", 15 * MINUTE_MS), ("1h", self.H)], 15 * MINUTE_MS, 2, 0, 10, 0.9)
         self.assertAlmostEqual(r.current_bp, -59)
         self.assertEqual(r.current_time, 59 * MINUTE_MS)
         self.assertAlmostEqual(r.changes[0].change_bp, -15)
@@ -334,34 +404,30 @@ class DerivativesTest(unittest.TestCase):
         self.assertAlmostEqual(r.smoothed[3].missing_ratio, 1 / 15)
         self.assertIsNone(r.smoothed[0].pct)
         self.assertEqual(r.smoothed[1].pct, 25.0)
+        # 현재값 −59bp의 최근 10분(50분 봉 결측 → 9개) 분포 위치: 가장 작다
+        self.assertEqual(r.current_pct, 100 * 0.5 / 9)
+        strict = deriv.premium(rows, 60 * MINUTE_MS, [], 15 * MINUTE_MS, 2, 0, 10, 0.95)
+        self.assertEqual((strict.current_pct, strict.current_pct_null_reason), (None, "insufficient_coverage"))
 
 
-class QuadrantChangeTest(unittest.TestCase):
-    """A.8.3: 확정 4분면 사이의 변화만. indeterminate·null은 건너뛴다."""
+class FlowTest(unittest.TestCase):
+    """A.12 체결 흐름."""
 
-    def test_skips_indeterminate_and_null(self) -> None:
-        step = 5 * MINUTE_MS
-        report = 12 * step
-        ref = 1000 * step
-        first = ref - 2 * report + step
-        # 보고 기간 앞: A. 보고 기간: A, 미정, A, null, 미정, B, 미정, B, A
-        script = {first + i * step: "oi_up_price_up" for i in range(12)}
-        seq = ["oi_up_price_up", "indeterminate", "oi_up_price_up", None, "indeterminate",
-               "oi_down_price_down", "indeterminate", "oi_down_price_down", "oi_up_price_up"]
-        start = ref - report + step
-        script.update({start + i * step: q for i, q in enumerate(seq)})
-        latest = start + (len(seq) - 1) * step
+    def test_delta_imbalance_and_ema(self) -> None:
+        bars = [bar(0, 1, 1, 1, 1, volume=10, taker_buy=7), bar(1, 1, 1, 1, 1, volume=0, taker_buy=0)]
+        self.assertEqual(flow_mod.deltas(bars), [4.0, 0.0])
+        self.assertEqual(flow_mod.imbalances(bars), [0.4, None])
+        self.assertEqual(flow_mod.ema([1.0, 3.0, 5.0, None, 2.0], 2), [None, 2.0, 2.0 + 2 / 3 * 3, None, None])
 
-        def fake(ts, period, period_ms, *args):
-            return deriv.QuadrantPoint(ts, period, 0.01, 0.01, script.get(ts), None)
-
-        with mock.patch.object(engine.deriv, "quadrant_at", side_effect=fake):
-            got = engine._quadrant_changes("1h", 60 * MINUTE_MS, {}, {}, 0.001, 0.001, ref, latest, report)
-        self.assertEqual(
-            [(e.bar_time, e.measures.from_, e.measures.to) for e in got],
-            [(start + 5 * step, "oi_up_price_up", "oi_down_price_down"), (start + 8 * step, "oi_down_price_down", "oi_up_price_up")],
-        )
-        self.assertEqual([e.bars_ago for e in got], [3, 0])
+    def test_flow_result(self) -> None:
+        bars = [bar(i, 1, 1, 1, 1, volume=10, taker_buy=4 + i) for i in range(4)]
+        r = flow_mod.flow(series_of(bars), 2, 3)
+        self.assertEqual((r.taker_buy, r.taker_sell, r.delta), (7, 3, 4))
+        self.assertAlmostEqual(r.imbalance.value, 0.4)
+        self.assertEqual(r.imbalance_pct.value, 100 * 2.5 / 3)
+        self.assertIsNotNone(r.delta_ema.value)
+        gap = flow_mod.flow(series_of([bars[0], None, bars[2], bars[3]]), 2, 3)
+        self.assertEqual(gap.imbalance_pct.null_reason, "window_contains_absent_bar")
 
 
 class LevelsTest(unittest.TestCase):
@@ -399,6 +465,27 @@ class LevelsTest(unittest.TestCase):
         self.assertEqual(len(members_known_at(lv, 5 * TF, 6 * TF - 1, False)), 1)
         self.assertEqual(len(members_known_at(lv, 6 * TF, 7 * TF - 1, True)), 1)  # 자기 구간의 24h 고가 제외
         self.assertEqual(len(members_known_at(lv, 7 * TF, 8 * TF - 1, True)), 2)
+
+    def test_level_id_and_distance(self) -> None:
+        a = LevelMember(VWAP, 100, None, None, None)
+        b = LevelMember(HIGH_24H, 101, None, None, 0)
+        lv1 = build_level((a, b), 0.25, 4.0, 100.0)
+        lv2 = build_level((b, a), 0.25, 4.0, 100.0)
+        self.assertEqual(lv1.level_id, lv2.level_id)
+        self.assertTrue(lv1.level_id.startswith("lv_") and len(lv1.level_id) == 11)
+        self.assertNotEqual(lv1.level_id, build_level((a,), 0.25, 4.0, 100.0).level_id)
+        self.assertAlmostEqual(distance_bp(101, 100), 100.0)
+
+    def test_touch_count(self) -> None:
+        sw = swing(HIGH, 100, 0, 1)  # known_time = 2 × TF → 봉 2부터 센다
+        lv = build_level((LevelMember("swing_15m", 100, sw, False, None), LevelMember(VWAP, 100.5, None, None, None)), 0.25, 4.0, 90.0)
+        # zone은 스윙 구성원만으로 [99, 101]. 봉 2~3 안, 4 밖, 5 부재, 6 안, 7 안
+        rows = [bar(0, 100, 100, 100, 100), bar(1, 100, 100, 100, 100), bar(2, 98, 99.5, 97, 98), bar(3, 98, 99, 97, 98),
+                bar(4, 95, 96, 94, 95), None, bar(6, 100, 102, 100, 101), bar(7, 101, 103, 100.5, 102)]
+        stats = touch_stats(lv, series_of(rows), 0.25, 4.0)
+        self.assertEqual((stats.touch_count, stats.last_touch_bars_ago, stats.absent_bars), (2, 0, 1))
+        only_vwap = build_level((LevelMember(VWAP, 100, None, None, None),), 0.25, 4.0, 90.0)
+        self.assertEqual(touch_stats(only_vwap, series_of(rows), 0.25, 4.0).null_reason, "no_swing_member")
 
     def test_level_events(self) -> None:
         member = LevelMember(VWAP, 100, None, None, None)

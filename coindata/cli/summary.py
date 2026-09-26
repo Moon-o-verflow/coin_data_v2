@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from coindata.cli.flows import IngestFlow, run_sync
+from coindata.cli.plan_eval import historical_views, live_views, refresh_plans
 from coindata.compute.engine import ComputeError, analyze, load_input
 from coindata.config import Config
 from coindata.ingest.archive import ArchiveClient
@@ -66,6 +67,8 @@ def run_summary(
     sleeper: Sleeper,
     clients: tuple[ArchiveClient, BinanceRestClient] | None,
     at_ms: int | None,
+    full_params: bool,
+    compact: bool,
 ) -> SummaryResult:
     """`at_ms`가 None이면 현재 시점 요약이며 `clients`가 필요하다."""
     symbol = config.data.symbol
@@ -82,6 +85,7 @@ def run_summary(
         if clients is None:
             raise SummaryError("현재 시점 요약에는 수집 클라이언트가 필요하다")
         failures, current_bar, funding, run_time, run_time_source = _refresh(conn, config, clock, clients)
+        refresh_plans(conn, config, clock.now_ms())
         trigger = SummaryTrigger.MANUAL
     else:
         if at_ms > bounds.end_ms + MINUTE_MS:
@@ -93,6 +97,10 @@ def run_summary(
     except ComputeError as exc:
         raise SummaryError(str(exc)) from exc
     analysis = analyze(inp, config)
+    if at_ms is None:
+        plan_views = live_views(conn, config, analysis.ref_time)
+    else:
+        plan_views = historical_views(conn, config, analysis.ref_time)
 
     created_at, summary_id = _new_summary_id(conn, output_dir, clock, sleeper)
     dataset_last = () if at_ms is not None else _dataset_last(conn, symbol)
@@ -111,9 +119,13 @@ def run_summary(
         failures=failures,
         gaps=tuple(query.gaps_overlapping(conn, symbol, analysis.anchor_ms, analysis.ref_time - 1)),
         previous=query.previous_summary(conn, trigger, analysis.ref_time),
+        full_params=full_params,
+        plans=plan_views,
     )
     built = build_summary(ctx)
-    path = save_summary(conn, output_dir, built, summary_id, created_at, trigger, analysis.ref_time, analysis.ref_price)
+    path = save_summary(
+        conn, output_dir, built, summary_id, created_at, trigger, analysis.ref_time, analysis.ref_price, compact
+    )
     return SummaryResult(path, summary_id, bool(failures), failures)
 
 
