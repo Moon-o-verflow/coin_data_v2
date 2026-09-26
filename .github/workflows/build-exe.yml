@@ -23,11 +23,13 @@ jobs:
         with:
           python-version: "3.11"
 
+      # 패키지 의존성(Windows의 tzdata, FR-4.9)과 빌드 도구를 시험 전에 설치한다.
+      # Windows에는 시스템 시간대 데이터가 없어서 tzdata 없이는 세션 판정이 null이 된다.
+      - name: 의존성과 빌드 도구 설치
+        run: python -m pip install . pyinstaller
+
       - name: 시험
         run: python -m unittest discover -s tests
-
-      - name: 빌드 도구 설치
-        run: python -m pip install pyinstaller tzdata
 
       - name: 실행 파일 만들기
         run: >-
