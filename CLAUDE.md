@@ -58,8 +58,8 @@ API 키를 코드, 설정, 환경변수로 취급하지 않는다.
 ### 3.1 계층
 
 ```
-cli → report → compute → store
- └──────────────────────→ ingest → (외부)
+gui → cli → report → compute → store
+       └──────────────────────→ ingest → (외부)
 공용: config, models
 ```
 
@@ -67,6 +67,7 @@ cli → report → compute → store
 
 | 모듈 | 참조 가능 |
 |---|---|
+| `gui` | cli, config, models |
 | `cli` | report, compute, store, ingest, config, models |
 | `report` | compute, store, config, models |
 | `compute` | store(조회 인터페이스), config, models |
@@ -78,6 +79,7 @@ cli → report → compute → store
 
 | 계층 | 책임 | 금지 |
 |---|---|---|
+| `gui` | 화면 표시, 입력 수집, cli 함수 호출 (`docs/PRD.md` 10.8) | 지표 계산, 저장소 직접 접근, 외부 요청 |
 | `cli` | 명령 해석, 흐름 조립, ingest 결과를 store에 적재 | 지표 계산, 파싱 |
 | `ingest` | 아카이브 다운로드, REST 요청, 응답 파싱 | 지표 계산, 이벤트 판정, 저장소 접근 |
 | `store` | 적재, 조회, 결측 관리 | 외부 요청, 지표 계산 |
