@@ -12,8 +12,9 @@ from dataclasses import dataclass
 
 from coindata.compute.series import BarSeries
 from coindata.compute.structure import ABOVE, Break
+from coindata.config import S1_CURRENT_VERSION
 
-S1_VERSION = "S1.v1"
+S1_VERSION = S1_CURRENT_VERSION
 S1_TF = "15m"  # 부록 B.1.1: 정의의 일부이며 설정값이 아니다
 S1_CONTEXT_TF = "1h"
 BREAK_KINDS = ("BOS", "MSS", "break_no_displacement", "break_unclassified")

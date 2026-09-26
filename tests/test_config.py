@@ -44,6 +44,11 @@ class ConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "rate_limit_ratio"):
             self._load("[runtime]\nrate_limit_ratio = 1.5\n")
 
+    def test_s1_horizons_are_fixed_by_definition(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "새 정의 버전"):
+            self._load("[stats.s1]\nhorizon_bars = [4, 6]\n")
+        self.assertEqual(self._load("[stats.s1]\nhorizon_bars = [4, 8]\n").stats.s1.horizon_bars, (4, 8))
+
     def test_timeframe_lists_checked(self) -> None:
         with self.assertRaisesRegex(ConfigError, "levels.normalize_tf"):
             self._load('[indicators]\ntimeframes = ["15m", "1d"]\n[levels]\nswing_timeframes = ["15m"]\n')

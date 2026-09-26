@@ -54,6 +54,14 @@ class ApiLimits:
 
 API_LIMITS = ApiLimits()
 
+# ---------------------------------------------------------------------------
+# 통계 정의 등록부 (PRD 부록 B). 결과를 보기 전에 확정한 값이며, 설정으로 바꿀 수 없다.
+# 정의를 바꾸려면 부록 B에 새 버전을 등록하고 여기에 추가한 뒤 현재 버전을 올린다.
+# ---------------------------------------------------------------------------
+
+S1_DEFINITIONS: dict[str, tuple[int, ...]] = {"S1.v1": (4, 8)}  # 버전 → horizon_bars
+S1_CURRENT_VERSION = "S1.v1"
+
 
 # ---------------------------------------------------------------------------
 # 설정 섹션. 기본값은 PRD 부록 A.10과 각 FR에 정의된 값이다.
@@ -497,8 +505,12 @@ def _validate_windows(config: Config) -> list[str]:
         if value < 1:
             problems.append(f"{key}: 1 이상이어야 한다")
     horizons = config.stats.s1.horizon_bars
-    if not horizons or min(horizons) < 1 or list(horizons) != sorted(set(horizons)):
-        problems.append("stats.s1.horizon_bars: 1 이상의 서로 다른 정수를 오름차순으로 적어야 한다")
+    registered = S1_DEFINITIONS[S1_CURRENT_VERSION]
+    if horizons != registered:
+        problems.append(
+            f"stats.s1.horizon_bars {list(horizons)}가 부록 B에 등록된 {S1_CURRENT_VERSION}의 값 {list(registered)}와 다르다. "
+            "판정 기간을 바꾸려면 부록 B에 새 정의 버전을 등록하고 버전을 올려야 한다"
+        )
     if config.stats.min_n < 1:
         problems.append("stats.min_n: 1 이상이어야 한다")
     if min(config.plans.default_ttl_hours, config.plans.report_hours) < 1:
