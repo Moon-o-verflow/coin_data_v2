@@ -1,0 +1,110 @@
+# coindata 설정 예시. 여기 적힌 값은 모두 기본값이다(PRD 부록 A.10, FR-6.2).
+# 사용하려면 coindata.toml로 복사한 뒤 바꿀 값만 남기면 된다. 빠진 키는 기본값을 쓴다.
+# 상대 경로는 설정 파일이 있는 폴더를 기준으로 한다.
+# 지표·레짐·레벨·이벤트 값은 관행적 기본값이며 검증되지 않았다(PRD 15.1).
+
+[data]
+symbol = "ETHUSDT"
+db_path = "data/coindata.sqlite3"
+init_days = 130                   # init 기본 기간(일). 1d 워밍업 119일 + 여유 (A.9.2)
+archive_publish_delay_days = 2    # 이 기간이 지나도 아카이브가 없으면 archive_missing (12.2)
+refill_window_days = 30           # sync가 빈칸을 다시 채우려 시도하는 최근 기간(일)
+
+[runtime]
+log_level = "WARNING"            # 요청마다 기록을 보려면 "INFO"
+archive_base_url = "https://data.binance.vision/data"
+rest_base_url = "https://fapi.binance.com"
+http_timeout_seconds = 30.0
+max_retries = 5                   # 네트워크 오류·5xx 재시도 횟수 (FR-1.6)
+backoff_initial_seconds = 1.0
+backoff_max_seconds = 60.0
+rate_limit_ratio = 0.7            # 요청 한도의 이 비율에 도달하면 대기 (FR-1.5)
+checksum_retries = 2              # 체크섬 불일치 시 재다운로드 횟수 (FR-1.1)
+db_busy_timeout_ms = 5000
+
+[indicators]
+timeframes = ["15m", "30m", "1h", "1d"]
+
+[indicators.atr]
+n = 14
+
+[indicators.parkinson]
+n = 20
+pct_lookback = 100
+
+[indicators.candle]
+report_bars = 5
+
+[indicators.zigzag]
+k = 2.0
+
+[indicators.structure]
+displacement_mult = 1.5
+displacement_lookback = 20
+
+[regime.er]
+n = 10
+trend = 0.5
+range = 0.3
+
+[regime.vol]
+high = 80.0
+low = 20.0
+
+[regime.shock]
+timeframes = ["15m", "30m", "1h"]
+wick_th = 0.6
+range_atr_th = 1.5
+gap_bars = 2
+duration_bars = 4
+
+[derivatives.quadrant]
+periods = ["1h", "4h"]
+oi_band = 0.001
+px_band = 0.001
+
+[derivatives.premium]
+windows = ["15m", "1h", "4h"]
+smoothing_tf = "15m"
+pct_lookback = 672
+
+[levels]
+swing_timeframes = ["15m", "1h"]
+normalize_tf = "1h"
+vwap_window_minutes = 1440
+range_window_minutes = 1440
+swing_count = 5
+merge_dist = 0.5
+zone_width = 0.25
+report_each_side = 5
+
+[events]
+report_bars = { "15m" = 16, "30m" = 8, "1h" = 8, "1d" = 3 }
+
+[events.quadrant_change]
+report_minutes = 240
+
+[events.level]
+timeframes = ["15m"]
+
+[events.volume_spike]
+timeframes = ["15m", "30m", "1h"]
+lookback = 20
+mult = 2.0
+
+[events.premium_extreme]
+high = 95.0
+low = 5.0
+
+[compute]
+anchor_time = ""                  # 경로 의존 계산의 시작일 YYYY-MM-DD. 비우면 저장소 첫 1분봉 (A.1.8)
+
+[report]
+output_dir = "summaries"
+swings_per_tf = 6
+stale_minutes_bars = 3            # 실행 시각 대비 이만큼 늦으면 경고 (FR-4.3)
+stale_minutes_metrics = 15
+digits_price = 2
+digits_ratio = 3
+digits_bp = 2
+digits_pct = 1
